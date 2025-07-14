@@ -18,7 +18,7 @@ dev_requirements = read_requirements("requirements-dev.txt")
 
 setuptools.setup(
     name="flamapy",
-    version="2.0.1",
+    version="2.1.0.dev0",
     author="Flamapy",
     author_email="flamapy@us.es",
     description="Flamapy feature model is a distribution of the " \
