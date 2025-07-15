@@ -3,26 +3,25 @@ name: Python analisys
 on: [push, pull_request]
 
 jobs:
-  prospector:
+  ruff:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v4
       - name: Set up Python 3.9
-        uses: actions/setup-python@v2
+        uses: actions/setup-python@v5
         with:
           python-version: 3.9
-      - name: Install dependencies
+      - name: Installing depencencies
         run: |
-          python -m pip install --upgrade pip
-          python -m venv venv
-          source venv/bin/activate
-          pip install .
-          pip install prospector[with_everything]
-          rm flamapy/__init__.py
-      - name: Analysing the code with prospector
+              python -m pip install --upgrade pip
+              pip install setuptools
+              pip install .
+      - name: Installing Ruff linter
         run: |
-          source venv/bin/activate
-          prospector
+            pip install ruff
+      - name: Running Ruff linter
+        run: |
+            ruff check .
   mypy:
     runs-on: ubuntu-latest
     steps:
