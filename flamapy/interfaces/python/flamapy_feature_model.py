@@ -61,6 +61,18 @@ class FLAMAFeatureModel:
             print(f"Error: {exception}")
             return None
 
+    def language_level(self) -> Union[None, Any]:
+        """Return the UVL language level."""
+
+        try:
+            result = self.discover_metamodel.use_operation(
+                self.fm_model, "FMLanguageLevel"
+            ).get_result()
+            return result
+        except FlamaException as exception:
+            print(f"Error: {exception}")
+            return None
+        
     def average_branching_factor(self) -> Union[None, float]:
         """
         This refers to the average number of child features that a parent feature has in a
