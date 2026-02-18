@@ -61,7 +61,7 @@ def test_core_features_operation(setup_model, expected_output):
     operation = BDDCoreFeatures()
     operation.execute(model)
     result = operation.get_core_features()
-    assert result == expected_output, (
+    assert sorted(result) == sorted(expected_output), (
         f"The result {result} does not match with the expected output {expected_output}"
     )
 
@@ -109,7 +109,7 @@ def test_dead_features_operation(setup_model, expected_output):
     operation = BDDDeadFeatures()
     operation.execute(model)
     result = operation.get_dead_features()
-    assert result == expected_output, (
+    assert sorted(result) == sorted(expected_output), (
         f"The result {result} does not match the expected output {expected_output}"
     )
 
