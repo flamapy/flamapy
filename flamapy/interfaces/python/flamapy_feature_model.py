@@ -1,8 +1,11 @@
+import logging
 from typing import List, Any, Union
 from flamapy.core.discover import DiscoverMetamodels
 from flamapy.metamodels.fm_metamodel.models import FeatureModel
 from flamapy.core.exceptions import FlamaException
 from flamapy.metamodels.configuration_metamodel.models import Configuration
+
+logger = logging.getLogger(__name__)
 
 
 class FLAMAFeatureModel:
@@ -58,7 +61,7 @@ class FLAMAFeatureModel:
                 result.append(partial_set)
             return result
         except FlamaException as exception:
-            print(f"Error: {exception}")
+            logger.error("Error: %s", exception)
             return None
 
     def language_level(self) -> Union[None, Any]:
@@ -89,7 +92,7 @@ class FLAMAFeatureModel:
             ).get_result()
             return result
         except FlamaException as exception:
-            print(f"Error: {exception}")
+            logger.error("Error: %s", exception)
             return None
 
     def count_leafs(self) -> Union[None, int]:
@@ -106,7 +109,7 @@ class FLAMAFeatureModel:
             ).get_result()
             return result
         except FlamaException as exception:
-            print(f"Error: {exception}")
+            logger.error("Error: %s", exception)
             return None
 
     def estimated_number_of_configurations(self) -> Union[None, int]:
@@ -125,7 +128,7 @@ class FLAMAFeatureModel:
             ).get_result()
             return result
         except FlamaException as exception:
-            print(f"Error: {exception}")
+            logger.error("Error: %s", exception)
             return None
 
     def feature_ancestors(self, feature_name: str) -> Union[None, List[str]]:
@@ -145,7 +148,7 @@ class FLAMAFeatureModel:
                 result.append(res.name)
             return result
         except FlamaException as exception:
-            print(f"Error: {exception}")
+            logger.error("Error: %s", exception)
             return None
 
     def leaf_features(self) -> Union[None, List[str]]:
@@ -171,7 +174,7 @@ class FLAMAFeatureModel:
                 leaf_features.append(feature.name)
             return leaf_features
         except FlamaException as exception:
-            print(f"Error: {exception}")
+            logger.error("Error: %s", exception)
             return None
 
     def max_depth(self) -> Union[None, int]:
@@ -188,7 +191,7 @@ class FLAMAFeatureModel:
                 self.fm_model, "FMMaxDepthTree"
             ).get_result()
         except FlamaException as exception:
-            print(f"Error: {exception}")
+            logger.error("Error: %s", exception)
             return None
 
     # The methods above rely on sat to be executed.
@@ -207,7 +210,7 @@ class FLAMAFeatureModel:
             ).get_result()
             return features
         except FlamaException as exception:
-            print(f"Error: {exception}")
+            logger.error("Error: %s", exception)
             return None
 
     def dead_features(self) -> Union[None, List[str]]:
@@ -223,7 +226,7 @@ class FLAMAFeatureModel:
             ).get_result()
             return features
         except FlamaException as exception:
-            print(f"Error: {exception}")
+            logger.error("Error: %s", exception)
             return None
 
     def false_optional_features(self) -> Union[None, List[str]]:
@@ -242,7 +245,7 @@ class FLAMAFeatureModel:
             features = operation.get_result()
             return features
         except FlamaException as exception:
-            print(f"Error: {exception}")
+            logger.error("Error: %s", exception)
             return None
 
     def filter(self, configuration_path: str) -> Union[None, List[Configuration]]:
@@ -262,7 +265,7 @@ class FLAMAFeatureModel:
             result = operation.get_result()
             return result
         except FlamaException as exception:
-            print(f"Error: {exception}")
+            logger.error("Error: %s", exception)
             return None
 
     def configurations_number(self, with_sat: bool = False) -> Union[None, int]:
@@ -286,7 +289,7 @@ class FLAMAFeatureModel:
                 ).get_result()
             return nop
         except FlamaException as exception:
-            print(f"Error: {exception}")
+            logger.error("Error: %s", exception)
             return None
 
     def configurations(self, with_sat: bool = False) -> Union[None, List[Configuration]]:
@@ -309,7 +312,7 @@ class FLAMAFeatureModel:
                 ).get_result()
             return products
         except FlamaException as exception:
-            print(f"Error: {exception}")
+            logger.error("Error: %s", exception)
             return None
 
     def commonality(self, configuration_path: str) -> Union[None, float]:
@@ -329,7 +332,7 @@ class FLAMAFeatureModel:
             operation.execute(self.sat_model)
             return operation.get_result()
         except FlamaException as exception:
-            print(f"Error: {exception}")
+            logger.error("Error: %s", exception)
             return None
 
     def satisfiable_configuration(
@@ -358,7 +361,7 @@ class FLAMAFeatureModel:
             result = operation.get_result()
             return result
         except FlamaException as exception:
-            print(f"Error: {exception}")
+            logger.error("Error: %s", exception)
             return None
 
     def satisfiable(self) -> Union[None, bool]:
@@ -374,5 +377,5 @@ class FLAMAFeatureModel:
             ).get_result()
             return result
         except FlamaException as exception:
-            print(f"Error: {exception}")
+            logger.error("Error: %s", exception)
             return None
