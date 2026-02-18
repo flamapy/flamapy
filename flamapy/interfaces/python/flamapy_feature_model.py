@@ -75,7 +75,7 @@ class FLAMAFeatureModel:
         except FlamaException as exception:
             print(f"Error: {exception}")
             return None
-        
+
     def average_branching_factor(self) -> Union[None, float]:
         """
         This refers to the average number of child features that a parent feature has in a
