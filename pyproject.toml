@@ -4,16 +4,16 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "flamapy"
-version = "2.1.0.dev1"
+version = "2.1.0.dev2"
 description = "Flamapy feature model is a distribution of the flama framework containing all plugins required to analyze feature models. It also offers a richer API and a complete command line interface and documentation."
 readme = "README.md"
 license = "GPL-3.0-or-later"
 authors = [{ name = "Flamapy", email = "flamapy@us.es" }]
 requires-python = ">=3.9"
 dependencies = [
-    "flamapy-fw~=2.1.0.dev1",
-    "flamapy-fm~=2.1.0.dev1",
-    "flamapy-sat~=2.1.0.dev1",
+    "flamapy-fw~=2.1.0.dev2",
+    "flamapy-fm~=2.1.0.dev2",
+    "flamapy-sat~=2.1.0.dev2",
     "flamapy-bdd~=2.1.0.dev2",
 ]
 
