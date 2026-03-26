@@ -25,7 +25,7 @@
 <!-- ABOUT THE PROJECT -->
 
 # About The Project
-FLAMAPY Feature model distribution provides an easier way of using FLAMAPY when analysing feature models. It packs the most used plugins for analyis of feature models adding a layer of convenience to use the framework or integrate it. If some other operations are required please see in the [documentation](flamapy.github.io/docs) if its supported in the ecosystem though the Python interface. 
+FLAMAPY Feature model distribution provides an easier way of using FLAMAPY when analysing feature models. It packs the most used plugins for analyis of feature models adding a layer of convenience to use the framework or integrate it. If some other operations are required please see in the [documentation](https://flamapy.github.io/docs) if its supported in the ecosystem though the Python interface. 
 
 Feature Model Analysis has a crucial role in software product line engineering, enabling us to understand, design, and validate the complex relationships among features in a software product line. These feature models can often be complex and challenging to analyze due to their variability, making it difficult to identify conflicts, dead features, and potential optimizations. This is where this distribution comes in.
 
