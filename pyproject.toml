@@ -15,6 +15,7 @@ dependencies = [
     "flamapy-fm~=2.5.0",
     "flamapy-sat~=2.5.0",
     "flamapy-bdd~=2.5.0",
+    "flamapy-z3~=2.5.0",
 ]
 
 [project.optional-dependencies]

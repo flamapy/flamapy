@@ -1,5 +1,5 @@
 import logging
-from typing import List, Any, Union
+from typing import Any, Dict, Generator, List, Optional, Tuple, Union
 from flamapy.core.discover import DiscoverMetamodels
 from flamapy.metamodels.fm_metamodel.models import FeatureModel
 from flamapy.core.exceptions import FlamaException
@@ -15,19 +15,12 @@ class FLAMAFeatureModel:
         Any model in UVL, FaMaXML or FeatureIDE format are accepted
         """
         self.model_path = model_path
-        """
-        Creating the interface witht he flama framework
-        """
         self.discover_metamodel = DiscoverMetamodels()
-        """
-        We save the model for later ussage
-        """
         self.fm_model = self._read(model_path)
-        """
-        We create a empty sat model and a bdd model to avoid double transformations
-        """
         self.sat_model = None
         self.bdd_model = None
+        self.z3_model = None
+        self.diagnosis_model = None
 
     def _read(self, model_path: str) -> FeatureModel:
         return self.discover_metamodel.use_transformation_t2m(model_path, "fm")
@@ -39,6 +32,16 @@ class FLAMAFeatureModel:
     def _transform_to_bdd(self) -> None:
         if self.bdd_model is None:
             self.bdd_model = self.discover_metamodel.use_transformation_m2m(self.fm_model, "bdd")
+
+    def _transform_to_z3(self) -> None:
+        if self.z3_model is None:
+            self.z3_model = self.discover_metamodel.use_transformation_m2m(self.fm_model, "z3")
+
+    def _transform_to_diagnosis(self) -> None:
+        if self.diagnosis_model is None:
+            self.diagnosis_model = self.discover_metamodel.use_transformation_m2m(
+                self.fm_model, "pysat_diagnosis"
+            )
 
     def atomic_sets(self) -> Union[None, List[List[Any]]]:
         """
@@ -376,6 +379,289 @@ class FLAMAFeatureModel:
                 self.sat_model, "PySATSatisfiable"
             ).get_result()
             return result
+        except FlamaException as exception:
+            logger.error("Error: %s", exception)
+            return None
+
+    # FM-based operations
+
+    def metrics(self) -> Union[None, List[Dict[str, Any]]]:
+        """
+        Returns a collection of structural metrics for the feature model, such as number of
+        features, constraints, relations, and complexity indicators.
+        """
+        try:
+            return self.discover_metamodel.use_operation(
+                self.fm_model, "FMMetrics"
+            ).get_result()
+        except FlamaException as exception:
+            logger.error("Error: %s", exception)
+            return None
+
+    def variation_points(self) -> Union[None, Dict[str, List[str]]]:
+        """
+        Returns the variation points of the feature model. A variation point is a feature that
+        has at least one non-mandatory child, representing a decision point in the model.
+        The result maps each variation point name to the list of its variant feature names.
+        """
+        try:
+            raw = self.discover_metamodel.use_operation(
+                self.fm_model, "FMVariationPoints"
+            ).get_result()
+            return {vp.name: [v.name for v in variants] for vp, variants in raw.items()}
+        except FlamaException as exception:
+            logger.error("Error: %s", exception)
+            return None
+
+    # SAT-based operations
+
+    def backbone(self) -> Union[None, Dict[str, List[Any]]]:
+        """
+        Returns the backbone of the feature model: the set of features that must always be
+        selected (core) and those that must never be selected (dead) across all valid
+        configurations, grouped under 'core' and 'dead' keys.
+        """
+        try:
+            self._transform_to_sat()
+            return self.discover_metamodel.use_operation(
+                self.sat_model, "PySATBackbone"
+            ).get_result()
+        except FlamaException as exception:
+            logger.error("Error: %s", exception)
+            return None
+
+    # BDD-based operations
+
+    def homogeneity(self) -> Union[None, float]:
+        """
+        Measures how similar the products of the feature model are to each other. It is
+        computed as the average commonality factor across all features. A value of 1.0 means
+        all products are identical; lower values indicate more diversity.
+        """
+        try:
+            self._transform_to_bdd()
+            return self.discover_metamodel.use_operation(
+                self.bdd_model, "BDDHomogeneity"
+            ).get_result()
+        except FlamaException as exception:
+            logger.error("Error: %s", exception)
+            return None
+
+    def product_distribution(self) -> Union[None, List[int]]:
+        """
+        Returns the distribution of products by number of activated features. The value at
+        index i is the count of valid configurations that have exactly i features selected.
+        """
+        try:
+            self._transform_to_bdd()
+            return self.discover_metamodel.use_operation(
+                self.bdd_model, "BDDProductDistribution"
+            ).get_result()
+        except FlamaException as exception:
+            logger.error("Error: %s", exception)
+            return None
+
+    def variability(self) -> Union[None, Tuple[float, float]]:
+        """
+        Returns a tuple of (total_variability, partial_variability). Total variability is the
+        ratio of valid configurations to the theoretical maximum; partial variability is the
+        ratio relative to only the variant features.
+        """
+        try:
+            self._transform_to_bdd()
+            return self.discover_metamodel.use_operation(
+                self.bdd_model, "BDDVariability"
+            ).get_result()
+        except FlamaException as exception:
+            logger.error("Error: %s", exception)
+            return None
+
+    def variant_features(self) -> Union[None, List[str]]:
+        """
+        Returns the features that are neither core nor dead — they appear in some but not all
+        valid configurations. These are the features that actually vary across products.
+        """
+        try:
+            self._transform_to_bdd()
+            return self.discover_metamodel.use_operation(
+                self.bdd_model, "BDDVariantFeatures"
+            ).get_result()
+        except FlamaException as exception:
+            logger.error("Error: %s", exception)
+            return None
+
+    def unique_features(self) -> Union[None, List[str]]:
+        """
+        Returns features that appear in exactly one valid configuration. These features
+        uniquely identify a single product in the product line.
+        """
+        try:
+            self._transform_to_bdd()
+            return self.discover_metamodel.use_operation(
+                self.bdd_model, "BDDUniqueFeatures"
+            ).get_result()
+        except FlamaException as exception:
+            logger.error("Error: %s", exception)
+            return None
+
+    def pure_optional_features(self) -> Union[None, List[str]]:
+        """
+        Returns features with a feature inclusion probability of exactly 0.5, meaning they
+        are selected in exactly half of the valid configurations. These are the most
+        unconstrained optional features.
+        """
+        try:
+            self._transform_to_bdd()
+            return self.discover_metamodel.use_operation(
+                self.bdd_model, "BDDPureOptionalFeatures"
+            ).get_result()
+        except FlamaException as exception:
+            logger.error("Error: %s", exception)
+            return None
+
+    def feature_inclusion_probability(self) -> Union[None, Dict[str, float]]:
+        """
+        Returns a mapping from each feature name to its inclusion probability: the fraction
+        of valid configurations in which that feature is selected. Core features have
+        probability 1.0 and dead features have probability 0.0.
+        """
+        try:
+            self._transform_to_bdd()
+            return self.discover_metamodel.use_operation(
+                self.bdd_model, "BDDFeatureInclusionProbability"
+            ).get_result()
+        except FlamaException as exception:
+            logger.error("Error: %s", exception)
+            return None
+
+    def configurations_with_n_features(self, n: int) -> Union[None, List[Configuration]]:
+        """
+        Returns all valid configurations that have exactly n features selected.
+        """
+        try:
+            self._transform_to_bdd()
+            operation = self.discover_metamodel.get_operation(
+                self.bdd_model, "BDDConfigurationsWithNFeatures"
+            )
+            operation.set_n_features(n)
+            operation.execute(self.bdd_model)
+            return list(operation.get_result())
+        except FlamaException as exception:
+            logger.error("Error: %s", exception)
+            return None
+
+    def sampling(
+        self, size: int, with_replacement: bool = False
+    ) -> Union[None, List[Configuration]]:
+        """
+        Returns a random sample of valid configurations of the given size. When
+        with_replacement is True, the same configuration may appear more than once.
+        """
+        try:
+            self._transform_to_bdd()
+            operation = self.discover_metamodel.get_operation(self.bdd_model, "BDDSampling")
+            operation.set_sample_size(size)
+            operation.set_with_replacement(with_replacement)
+            operation.execute(self.bdd_model)
+            return operation.get_result()
+        except FlamaException as exception:
+            logger.error("Error: %s", exception)
+            return None
+
+    # Z3-based operations
+
+    def all_feature_bounds(self) -> Union[None, Dict[str, Dict[str, Any]]]:
+        """
+        Returns the value bounds for all typed (Integer, Real, String) attribute features in
+        the model. Each entry maps a feature name to a dict with 'min', 'max', and 'bounded'
+        keys. Requires the z3 metamodel plugin.
+        """
+        try:
+            self._transform_to_z3()
+            return self.discover_metamodel.use_operation(
+                self.z3_model, "Z3AllFeatureBounds"
+            ).get_result()
+        except FlamaException as exception:
+            logger.error("Error: %s", exception)
+            return None
+
+    def feature_bounds(self, variable_name: str) -> Union[None, Dict[str, Any]]:
+        """
+        Returns the value bounds for a specific typed attribute feature. The result dict
+        contains 'min', 'max', and 'bounded' keys. Requires the z3 metamodel plugin.
+        """
+        try:
+            self._transform_to_z3()
+            operation = self.discover_metamodel.get_operation(self.z3_model, "Z3FeatureBounds")
+            operation.set_variable_name(variable_name)
+            operation.execute(self.z3_model)
+            return operation.get_result()
+        except FlamaException as exception:
+            logger.error("Error: %s", exception)
+            return None
+
+    # Diagnosis-based operations
+
+    def diagnosis(
+        self,
+        configuration_path: str,
+        test_case_path: str,
+        max_diagnoses: Optional[int] = None,
+    ) -> Union[None, List[str]]:
+        """
+        Returns a list of diagnoses explaining why a given configuration does not satisfy
+        the test case constraints. Each diagnosis is a minimal set of constraints whose
+        removal would resolve the inconsistency. Requires the pysat_diagnosis plugin.
+        """
+        try:
+            self._transform_to_diagnosis()
+            configuration = self.discover_metamodel.use_transformation_t2m(
+                configuration_path, "configuration"
+            )
+            test_case = self.discover_metamodel.use_transformation_t2m(
+                test_case_path, "configuration"
+            )
+            operation = self.discover_metamodel.get_operation(
+                self.diagnosis_model, "PySATDiagnosis"
+            )
+            operation.set_configuration(configuration)
+            operation.set_test_case(test_case)
+            if max_diagnoses is not None:
+                operation.set_max_diagnoses(max_diagnoses)
+            operation.execute(self.diagnosis_model)
+            return operation.get_result()
+        except FlamaException as exception:
+            logger.error("Error: %s", exception)
+            return None
+
+    def conflict(
+        self,
+        configuration_path: str,
+        test_case_path: str,
+        max_conflicts: Optional[int] = None,
+    ) -> Union[None, List[str]]:
+        """
+        Returns a list of conflict sets: minimal subsets of the model constraints that are
+        inconsistent with the given configuration and test case. Requires the pysat_diagnosis
+        plugin.
+        """
+        try:
+            self._transform_to_diagnosis()
+            configuration = self.discover_metamodel.use_transformation_t2m(
+                configuration_path, "configuration"
+            )
+            test_case = self.discover_metamodel.use_transformation_t2m(
+                test_case_path, "configuration"
+            )
+            operation = self.discover_metamodel.get_operation(
+                self.diagnosis_model, "PySATConflict"
+            )
+            operation.set_configuration(configuration)
+            operation.set_test_case(test_case)
+            if max_conflicts is not None:
+                operation.set_max_conflicts(max_conflicts)
+            operation.execute(self.diagnosis_model)
+            return operation.get_result()
         except FlamaException as exception:
             logger.error("Error: %s", exception)
             return None
