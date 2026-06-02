@@ -5,13 +5,13 @@ from functools import wraps
 import inspect
 from pathlib import Path
 from shutil import copytree
-from typing import List, Tuple, Optional
+from typing import Any, List, Tuple, Optional
 from types import FunctionType
 
 from flamapy.interfaces.python.flamapy_feature_model import FLAMAFeatureModel
 
 # List to store registered commands and their arguments
-MANUAL_COMMANDS = []
+MANUAL_COMMANDS: List[Tuple[str, str, FunctionType, Tuple[Any, ...]]] = []
 
 
 def command(name, description, *args):  # type: ignore

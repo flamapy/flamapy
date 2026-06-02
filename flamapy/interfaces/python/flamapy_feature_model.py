@@ -1,5 +1,5 @@
 import logging
-from typing import Any, Dict, Generator, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 from flamapy.core.discover import DiscoverMetamodels
 from flamapy.metamodels.fm_metamodel.models import FeatureModel
 from flamapy.core.exceptions import FlamaException
