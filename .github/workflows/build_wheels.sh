@@ -74,10 +74,34 @@ printf '  %s\n' "${PLUGIN_SPECS[@]}"
 
 # 3. Download the plugin wheels honouring those constraints, forcing the
 #    pure-python (py3-none-any) build so they load in Pyodide/WASM.
-"$PYTHON" -m pip download --no-deps --only-binary=:all: \
-  --platform none --python-version 3.11 --abi none \
-  --dest "$OUT_DIR" \
-  "${PLUGIN_SPECS[@]}"
+#
+#    In a lock-step release every flamapy repo publishes its matching dev/release
+#    version to PyPI at almost the same moment, and the pins here are exact
+#    (`flamapy-sat~=2.6.0.dev2` => `>=2.6.0.dev2`).  PyPI's simple index (behind a
+#    CDN) lags the actual upload by a minute or two, so a download fired straight
+#    after this package's own publish can resolve against a stale index and fail
+#    with "No matching distribution".  Retry to ride out that propagation lag.
+PIP_DOWNLOAD_RETRIES="${PIP_DOWNLOAD_RETRIES:-10}"
+PIP_DOWNLOAD_WAIT="${PIP_DOWNLOAD_WAIT:-30}"
+
+attempt=1
+while true; do
+  if "$PYTHON" -m pip download --no-deps --only-binary=:all: \
+      --platform none --python-version 3.11 --abi none \
+      --dest "$OUT_DIR" \
+      "${PLUGIN_SPECS[@]}"; then
+    break
+  fi
+  if [ "$attempt" -ge "$PIP_DOWNLOAD_RETRIES" ]; then
+    echo "ERROR: plugin wheels still unavailable after $attempt attempts" >&2
+    echo "       (PyPI index may not have propagated the matching versions yet)" >&2
+    exit 1
+  fi
+  echo "Plugin wheels not all available yet (attempt $attempt/$PIP_DOWNLOAD_RETRIES);" \
+       "waiting ${PIP_DOWNLOAD_WAIT}s for PyPI index to propagate..." >&2
+  sleep "$PIP_DOWNLOAD_WAIT"
+  attempt=$((attempt + 1))
+done
 
 # 4. Drop the sdist that `python -m build` may leave behind; ship only wheels.
 rm -f "$OUT_DIR"/*.tar.gz
