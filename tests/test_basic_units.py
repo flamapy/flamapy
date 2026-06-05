@@ -7,6 +7,14 @@ VALID_MODEL = "./resources/models/simple/valid_model.uvl"
 NON_VALID_MODEL = "./resources/models/simple/invalid_model.uvl"
 
 VALID_CONFIG = "./resources/configurations/valid_configuration.csvconf"
+# Same configuration as VALID_CONFIG, expressed as an in-memory mapping. Config
+# operations accept a path, a {feature: value} mapping, or a Configuration object.
+VALID_CONFIG_DICT = {
+    "eCommerce": True, "Server": True, "PHP": True, "v74": True, "Storage": True,
+    "LOW": True, "Web": True, "Catalog": True, "Search": True, "BASIC": True,
+    "Shopping": True, "Cart": True, "Payment": True, "PayPal": True,
+    "Security": True, "HIGH": True,
+}
 
 
 def test_atomic_sets():
@@ -237,6 +245,15 @@ def test_valid_configuration():
 
     # Assert
     assert result == True
+
+
+def test_config_operations_accept_mapping():
+    # Config operations accept an in-memory {feature: value} mapping and must
+    # produce the same result as reading the equivalent configuration file.
+    flamafm = FLAMAFeatureModel(VALID_MODEL)
+
+    assert flamafm.filter(VALID_CONFIG_DICT) == flamafm.filter(VALID_CONFIG)
+    assert flamafm.satisfiable_configuration(VALID_CONFIG_DICT, False) is True
 
 
 def test_valid_product():

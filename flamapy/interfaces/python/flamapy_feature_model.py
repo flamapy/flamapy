@@ -90,6 +90,24 @@ class FLAMAFeatureModel:
                 self.fm_model, "pysat_diagnosis"
             )
 
+    def _as_configuration(
+        self, configuration: Union[str, Dict[str, Any], Configuration]
+    ) -> Configuration:
+        """Resolve a configuration argument into a Configuration model.
+
+        Accepts a path to a configuration file (read via the configuration
+        transformation), a ``{feature: value}`` mapping, or an already-built
+        Configuration. This lets callers that already hold a configuration in
+        memory (e.g. an interactive UI) pass it directly without writing a file.
+        """
+        if isinstance(configuration, Configuration):
+            return configuration
+        if isinstance(configuration, dict):
+            return Configuration(configuration)
+        return self.discover_metamodel.use_transformation_t2m(
+            configuration, "configuration"
+        )
+
     def atomic_sets(self) -> Union[None, List[List[Any]]]:
         """
         This operation is used to find the atomic sets in a model:
@@ -297,12 +315,13 @@ class FLAMAFeatureModel:
         This operation selects a subset of the products of a product line based on certain
         criteria. For example, you might filter the products to only include those that
         contain a certain feature.
+
+        ``configuration_path`` accepts a configuration file path, a ``{feature: value}``
+        mapping, or a Configuration object.
         """
         try:
             self._transform_to_sat()
-            configuration = self.discover_metamodel.use_transformation_t2m(
-                configuration_path, "configuration"
-            )
+            configuration = self._as_configuration(configuration_path)
             operation = self.discover_metamodel.get_operation(self.sat_model, "PySATFilter")
             operation.set_configuration(configuration)
             operation.execute(self.sat_model)
@@ -350,12 +369,13 @@ class FLAMAFeatureModel:
         This is a measure of how often a feature appears in the products of a
         product line. It's usually expressed as a percentage. A feature with
         100 per cent commonality is a core feature, as it appears in all products.
+
+        ``configuration_path`` accepts a configuration file path, a ``{feature: value}``
+        mapping, or a Configuration object.
         """
         try:
             self._transform_to_sat()
-            configuration = self.discover_metamodel.use_transformation_t2m(
-                configuration_path, "configuration"
-            )
+            configuration = self._as_configuration(configuration_path)
 
             operation = self.discover_metamodel.get_operation(self.sat_model, "PySATCommonality")
             operation.set_configuration(configuration)
@@ -375,13 +395,13 @@ class FLAMAFeatureModel:
         This is a product that is produced from a valid configuration of features. A valid
         product satisfies all the constraints and dependencies in the feature model.
 
+        ``configuration_path`` accepts a configuration file path, a ``{feature: value}``
+        mapping, or a Configuration object.
         ``backend`` selects the analysis plugin ("sat", "bdd" or "z3"); defaults to sat.
         """
         try:
             model = self._select_backend(backend, Backend.SAT)
-            configuration = self.discover_metamodel.use_transformation_t2m(
-                configuration_path, "configuration"
-            )
+            configuration = self._as_configuration(configuration_path)
             operation = self.discover_metamodel.get_operation(
                 model, "SatisfiableConfiguration"
             )
@@ -635,27 +655,27 @@ class FLAMAFeatureModel:
     def diagnosis(
         self,
         configuration_path: str,
-        test_case_path: str,
+        test_case_path: Optional[str] = None,
         max_diagnoses: Optional[int] = None,
     ) -> Union[None, List[str]]:
         """
-        Returns a list of diagnoses explaining why a given configuration does not satisfy
-        the test case constraints. Each diagnosis is a minimal set of constraints whose
-        removal would resolve the inconsistency. Requires the pysat_diagnosis plugin.
+        Returns a list of diagnoses explaining why a configuration is not valid against the
+        feature model: each diagnosis is a minimal set of constraints whose removal would
+        resolve the inconsistency. Requires the pysat_diagnosis plugin.
+
+        ``configuration_path`` accepts a configuration file path, a ``{feature: value}``
+        mapping, or a Configuration object. ``test_case_path`` is optional and, when given,
+        diagnoses against that expected outcome instead; it accepts the same input types.
         """
         try:
             self._transform_to_diagnosis()
-            configuration = self.discover_metamodel.use_transformation_t2m(
-                configuration_path, "configuration"
-            )
-            test_case = self.discover_metamodel.use_transformation_t2m(
-                test_case_path, "configuration"
-            )
             operation = self.discover_metamodel.get_operation(
                 self.diagnosis_model, "PySATDiagnosis"
             )
-            operation.set_configuration(configuration)
-            operation.set_test_case(test_case)
+            if configuration_path is not None:
+                operation.set_configuration(self._as_configuration(configuration_path))
+            if test_case_path is not None:
+                operation.set_test_case(self._as_configuration(test_case_path))
             if max_diagnoses is not None:
                 operation.set_max_diagnoses(max_diagnoses)
             operation.execute(self.diagnosis_model)
@@ -667,27 +687,26 @@ class FLAMAFeatureModel:
     def conflict(
         self,
         configuration_path: str,
-        test_case_path: str,
+        test_case_path: Optional[str] = None,
         max_conflicts: Optional[int] = None,
     ) -> Union[None, List[str]]:
         """
         Returns a list of conflict sets: minimal subsets of the model constraints that are
-        inconsistent with the given configuration and test case. Requires the pysat_diagnosis
-        plugin.
+        inconsistent with the given configuration. Requires the pysat_diagnosis plugin.
+
+        ``configuration_path`` accepts a configuration file path, a ``{feature: value}``
+        mapping, or a Configuration object. ``test_case_path`` is optional and, when given,
+        looks for conflicts against that expected outcome instead; same input types.
         """
         try:
             self._transform_to_diagnosis()
-            configuration = self.discover_metamodel.use_transformation_t2m(
-                configuration_path, "configuration"
-            )
-            test_case = self.discover_metamodel.use_transformation_t2m(
-                test_case_path, "configuration"
-            )
             operation = self.discover_metamodel.get_operation(
                 self.diagnosis_model, "PySATConflict"
             )
-            operation.set_configuration(configuration)
-            operation.set_test_case(test_case)
+            if configuration_path is not None:
+                operation.set_configuration(self._as_configuration(configuration_path))
+            if test_case_path is not None:
+                operation.set_test_case(self._as_configuration(test_case_path))
             if max_conflicts is not None:
                 operation.set_max_conflicts(max_conflicts)
             operation.execute(self.diagnosis_model)
