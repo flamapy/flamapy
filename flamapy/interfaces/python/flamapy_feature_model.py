@@ -1,6 +1,8 @@
 import logging
+from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple, Union
 from flamapy.core.discover import DiscoverMetamodels
+from flamapy.core.models import VariabilityModel
 from flamapy.metamodels.fm_metamodel.models import FeatureModel
 from flamapy.core.exceptions import FlamaException
 from flamapy.metamodels.configuration_metamodel.models import Configuration
@@ -8,11 +10,31 @@ from flamapy.metamodels.configuration_metamodel.models import Configuration
 logger = logging.getLogger(__name__)
 
 
+class Backend(str, Enum):
+    """Analysis backend (plugin) used to run a facade operation."""
+
+    SAT = "sat"
+    BDD = "bdd"
+    Z3 = "z3"
+
+
 class FLAMAFeatureModel:
-    def __init__(self, model_path: str):
+    # Backend -> (lazy transformation method, attribute caching the model)
+    _BACKENDS = {
+        Backend.SAT: ("_transform_to_sat", "sat_model"),
+        Backend.BDD: ("_transform_to_bdd", "bdd_model"),
+        Backend.Z3: ("_transform_to_z3", "z3_model"),
+    }
+
+    def __init__(self, model_path: str, backend: Optional[str] = None):
         """
         This is the path in the filesystem where the model is located.
-        Any model in UVL, FaMaXML or FeatureIDE format are accepted
+        Any model in UVL, FaMaXML or FeatureIDE format are accepted.
+
+        ``backend`` optionally sets a workspace-wide default backend
+        ("sat", "bdd" or "z3") for every operation that supports more than
+        one. When left as ``None`` each operation keeps its own historical
+        default, so existing code behaves exactly as before.
         """
         self.model_path = model_path
         self.discover_metamodel = DiscoverMetamodels()
@@ -21,9 +43,34 @@ class FLAMAFeatureModel:
         self.bdd_model = None
         self.z3_model = None
         self.diagnosis_model = None
+        self.backend = Backend(backend) if backend is not None else None
 
     def _read(self, model_path: str) -> FeatureModel:
         return self.discover_metamodel.use_transformation_t2m(model_path, "fm")
+
+    def _select_backend(
+        self,
+        backend: Optional[str],
+        default: Backend,
+    ) -> VariabilityModel:
+        """Resolve the backend to use, lazily transform to it and return its model.
+
+        Resolution order: explicit per-call ``backend`` > workspace-wide
+        ``self.backend`` > the operation's historical ``default``. All
+        backends (sat, bdd, z3) are accepted; if the chosen one does not
+        implement the requested operation a FlamaException is raised when it
+        runs.
+        """
+        try:
+            chosen = Backend(backend) if backend is not None else (self.backend or default)
+        except ValueError:
+            raise FlamaException(
+                f"Unknown backend '{backend}'. "
+                f"Choose from {[b.value for b in Backend]}."
+            )
+        transform, attr = self._BACKENDS[chosen]
+        getattr(self, transform)()
+        return getattr(self, attr)
 
     def _transform_to_sat(self) -> None:
         if self.sat_model is None:
@@ -198,55 +245,49 @@ class FLAMAFeatureModel:
             return None
 
     # The methods above rely on sat to be executed.
-    def core_features(self) -> Union[None, List[str]]:
+    def core_features(self, backend: Optional[str] = None) -> Union[None, List[str]]:
         """
         These are the features that are present in all products of a product line.
         In a feature model, they are the features that are mandatory and not optional.
         Core features define the commonality among all products in a product line.
-        This call requires sat to be called, however, there is an implementation within
-        flamapy that does not requires sat. please use the framework in case of needing it.
+
+        ``backend`` selects the analysis plugin ("sat", "bdd" or "z3"); defaults to sat.
         """
         try:
-            self._transform_to_sat()
-            features = self.discover_metamodel.use_operation(
-                self.sat_model, "PySATCoreFeatures"
-            ).get_result()
-            return features
+            model = self._select_backend(backend, Backend.SAT)
+            return self.discover_metamodel.use_operation(model, "CoreFeatures").get_result()
         except FlamaException as exception:
             logger.error("Error: %s", exception)
             return None
 
-    def dead_features(self) -> Union[None, List[str]]:
+    def dead_features(self, backend: Optional[str] = None) -> Union[None, List[str]]:
         """
         These are features that, due to the constraints and dependencies in the
         feature model, cannot be included in any valid product. Dead features are usually
         a sign of an error in the feature model.
+
+        ``backend`` selects the analysis plugin ("sat", "bdd" or "z3"); defaults to sat.
         """
         try:
-            self._transform_to_sat()
-            features = self.discover_metamodel.use_operation(
-                self.sat_model, "PySATDeadFeatures"
-            ).get_result()
-            return features
+            model = self._select_backend(backend, Backend.SAT)
+            return self.discover_metamodel.use_operation(model, "DeadFeatures").get_result()
         except FlamaException as exception:
             logger.error("Error: %s", exception)
             return None
 
-    def false_optional_features(self) -> Union[None, List[str]]:
+    def false_optional_features(self, backend: Optional[str] = None) -> Union[None, List[str]]:
         """
         These are features that appear to be optional in the feature model, but due to the
         constraints and dependencies, must be included in every valid product. Like dead features,
         false optional features are usually a sign of an error in the feature model.
+
+        ``backend`` selects the analysis plugin ("sat", "bdd" or "z3"); defaults to sat.
         """
         try:
-            self._transform_to_sat()
-            operation = self.discover_metamodel.get_operation(
-                self.sat_model, "PySATFalseOptionalFeatures"
-            )
-            operation.feature_model = self.fm_model
-            operation.execute(self.sat_model)
-            features = operation.get_result()
-            return features
+            model = self._select_backend(backend, Backend.SAT)
+            return self.discover_metamodel.use_operation(
+                model, "FalseOptionalFeatures"
+            ).get_result()
         except FlamaException as exception:
             logger.error("Error: %s", exception)
             return None
@@ -271,49 +312,35 @@ class FLAMAFeatureModel:
             logger.error("Error: %s", exception)
             return None
 
-    def configurations_number(self, with_sat: bool = False) -> Union[None, int]:
+    def configurations_number(self, backend: Optional[str] = None) -> Union[None, int]:
         """
         This is the total number of different full configurations that can be
         produced from a feature model. It's calculated by considering all possible
         combinations of features, taking into account the constraints and
         dependencies between features.
+
+        ``backend`` selects the analysis plugin ("sat", "bdd" or "z3"); defaults to bdd.
         """
         try:
-            nop = 0
-            if with_sat:
-                self._transform_to_sat()
-                nop = self.discover_metamodel.use_operation(
-                    self.sat_model, "PySATConfigurationsNumber"
-                ).get_result()
-            else:
-                self._transform_to_bdd()
-                nop = self.discover_metamodel.use_operation(
-                    self.bdd_model, "BDDConfigurationsNumber"
-                ).get_result()
-            return nop
+            model = self._select_backend(backend, Backend.BDD)
+            return self.discover_metamodel.use_operation(
+                model, "ConfigurationsNumber"
+            ).get_result()
         except FlamaException as exception:
             logger.error("Error: %s", exception)
             return None
 
-    def configurations(self, with_sat: bool = False) -> Union[None, List[Configuration]]:
+    def configurations(self, backend: Optional[str] = None) -> Union[None, List[Configuration]]:
         """
         These are the individual outcomes that can be produced from a feature model. Each product
         is a combination of features that satisfies all the constraints and dependencies in the
         feature model.
+
+        ``backend`` selects the analysis plugin ("sat", "bdd" or "z3"); defaults to bdd.
         """
         try:
-            products = []
-            if with_sat:
-                self._transform_to_sat()
-                products = self.discover_metamodel.use_operation(
-                    self.sat_model, "PySATConfigurations"
-                ).get_result()
-            else:
-                self._transform_to_bdd()
-                products = self.discover_metamodel.use_operation(
-                    self.bdd_model, "BDDConfigurations"
-                ).get_result()
-            return products
+            model = self._select_backend(backend, Backend.BDD)
+            return self.discover_metamodel.use_operation(model, "Configurations").get_result()
         except FlamaException as exception:
             logger.error("Error: %s", exception)
             return None
@@ -339,46 +366,46 @@ class FLAMAFeatureModel:
             return None
 
     def satisfiable_configuration(
-        self, configuration_path: str, full_configuration: bool = False
+        self,
+        configuration_path: str,
+        full_configuration: bool = False,
+        backend: Optional[str] = None,
     ) -> Union[None, bool]:
         """
         This is a product that is produced from a valid configuration of features. A valid
         product satisfies all the constraints and dependencies in the feature model.
+
+        ``backend`` selects the analysis plugin ("sat", "bdd" or "z3"); defaults to sat.
         """
         try:
-            self._transform_to_sat()
+            model = self._select_backend(backend, Backend.SAT)
             configuration = self.discover_metamodel.use_transformation_t2m(
                 configuration_path, "configuration"
             )
             operation = self.discover_metamodel.get_operation(
-                self.sat_model, "PySATSatisfiableConfiguration"
+                model, "SatisfiableConfiguration"
             )
 
-            if full_configuration:
-                configuration.is_full = True
-            else:
-                configuration.is_full = False
+            configuration.is_full = bool(full_configuration)
 
             operation.set_configuration(configuration)
-            operation.execute(self.sat_model)
-            result = operation.get_result()
-            return result
+            operation.execute(model)
+            return operation.get_result()
         except FlamaException as exception:
             logger.error("Error: %s", exception)
             return None
 
-    def satisfiable(self) -> Union[None, bool]:
+    def satisfiable(self, backend: Optional[str] = None) -> Union[None, bool]:
         """
         In the context of feature models, this usually refers to whether the feature model itself
         satisfies all the constraints and dependencies. A a valid feature model is one that
         does encodes at least a single valid product.
+
+        ``backend`` selects the analysis plugin ("sat", "bdd" or "z3"); defaults to sat.
         """
         try:
-            self._transform_to_sat()
-            result = self.discover_metamodel.use_operation(
-                self.sat_model, "PySATSatisfiable"
-            ).get_result()
-            return result
+            model = self._select_backend(backend, Backend.SAT)
+            return self.discover_metamodel.use_operation(model, "Satisfiable").get_result()
         except FlamaException as exception:
             logger.error("Error: %s", exception)
             return None
@@ -551,18 +578,21 @@ class FLAMAFeatureModel:
             return None
 
     def sampling(
-        self, size: int, with_replacement: bool = False
+        self, size: int, with_replacement: bool = False, backend: Optional[str] = None
     ) -> Union[None, List[Configuration]]:
         """
         Returns a random sample of valid configurations of the given size. When
         with_replacement is True, the same configuration may appear more than once.
+
+        ``backend`` selects the analysis plugin; defaults to bdd. Only sat and bdd
+        implement sampling.
         """
         try:
-            self._transform_to_bdd()
-            operation = self.discover_metamodel.get_operation(self.bdd_model, "BDDSampling")
+            model = self._select_backend(backend, Backend.BDD)
+            operation = self.discover_metamodel.get_operation(model, "Sampling")
             operation.set_sample_size(size)
             operation.set_with_replacement(with_replacement)
-            operation.execute(self.bdd_model)
+            operation.execute(model)
             return operation.get_result()
         except FlamaException as exception:
             logger.error("Error: %s", exception)
