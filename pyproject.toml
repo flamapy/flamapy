@@ -26,6 +26,10 @@ dev = [
     "mypy",
     "coverage",
 ]
+# Optional scalable counting/sampling backend (enables backend="sharpsat").
+sharpsat = [
+    "flamapy-sharpsat~=2.6.0.dev4",
+]
 
 [project.scripts]
 flamapy = "flamapy.commands:flamapy_cli"

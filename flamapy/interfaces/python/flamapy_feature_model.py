@@ -5,6 +5,7 @@ from flamapy.core.discover import DiscoverMetamodels
 from flamapy.core.models import VariabilityModel
 from flamapy.metamodels.fm_metamodel.models import FeatureModel
 from flamapy.core.exceptions import FlamaException
+from flamapy.core.operations import OptimizationGoal
 from flamapy.metamodels.configuration_metamodel.models import Configuration
 
 logger = logging.getLogger(__name__)
@@ -16,6 +17,7 @@ class Backend(str, Enum):
     SAT = "sat"
     BDD = "bdd"
     Z3 = "z3"
+    SHARPSAT = "sharpsat"
 
 
 class FLAMAFeatureModel:
@@ -24,6 +26,7 @@ class FLAMAFeatureModel:
         Backend.SAT: ("_transform_to_sat", "sat_model"),
         Backend.BDD: ("_transform_to_bdd", "bdd_model"),
         Backend.Z3: ("_transform_to_z3", "z3_model"),
+        Backend.SHARPSAT: ("_transform_to_sharpsat", "sharpsat_model"),
     }
 
     def __init__(self, model_path: str, backend: Optional[str] = None):
@@ -42,6 +45,7 @@ class FLAMAFeatureModel:
         self.sat_model = None
         self.bdd_model = None
         self.z3_model = None
+        self.sharpsat_model = None
         self.diagnosis_model = None
         self.backend = Backend(backend) if backend is not None else None
 
@@ -83,6 +87,14 @@ class FLAMAFeatureModel:
     def _transform_to_z3(self) -> None:
         if self.z3_model is None:
             self.z3_model = self.discover_metamodel.use_transformation_m2m(self.fm_model, "z3")
+
+    def _transform_to_sharpsat(self) -> None:
+        if self.sharpsat_model is None:
+            # Requires the optional flamapy-sharpsat plugin. use_transformation_m2m raises a
+            # FlamaException if it is not installed, which the operations surface to the caller.
+            self.sharpsat_model = self.discover_metamodel.use_transformation_m2m(
+                self.fm_model, "sharpsat"
+            )
 
     def _transform_to_diagnosis(self) -> None:
         if self.diagnosis_model is None:
@@ -338,7 +350,8 @@ class FLAMAFeatureModel:
         combinations of features, taking into account the constraints and
         dependencies between features.
 
-        ``backend`` selects the analysis plugin ("sat", "bdd" or "z3"); defaults to bdd.
+        ``backend`` selects the analysis plugin ("sat", "bdd", "z3", or "sharpsat" for a
+        scalable approximate count via the optional flamapy-sharpsat plugin); defaults to bdd.
         """
         try:
             model = self._select_backend(backend, Backend.BDD)
@@ -604,8 +617,9 @@ class FLAMAFeatureModel:
         Returns a random sample of valid configurations of the given size. When
         with_replacement is True, the same configuration may appear more than once.
 
-        ``backend`` selects the analysis plugin; defaults to bdd. Only sat and bdd
-        implement sampling.
+        ``backend`` selects the analysis plugin; defaults to bdd. sat and bdd implement
+        (deterministic/enumerating) sampling; "sharpsat" provides almost-uniform sampling
+        via the optional flamapy-sharpsat plugin.
         """
         try:
             model = self._select_backend(backend, Backend.BDD)
@@ -614,6 +628,76 @@ class FLAMAFeatureModel:
             operation.set_with_replacement(with_replacement)
             operation.execute(model)
             return operation.get_result()
+        except FlamaException as exception:
+            logger.error("Error: %s", exception)
+            return None
+
+    def t_wise_sampling(
+        self, t: int = 2, backend: Optional[str] = None
+    ) -> Union[None, List[Configuration]]:
+        """
+        Returns a t-wise (combinatorial) sample: a set of valid configurations that covers
+        every satisfiable combination of ``t`` feature selections (pairwise for ``t = 2``).
+
+        ``backend`` selects the analysis plugin; only "sat" implements t-wise sampling.
+        """
+        try:
+            model = self._select_backend(backend, Backend.SAT)
+            operation = self.discover_metamodel.get_operation(model, "PySATTWiseSampling")
+            operation.set_t(t)
+            operation.execute(model)
+            return operation.get_result()
+        except FlamaException as exception:
+            logger.error("Error: %s", exception)
+            return None
+
+    def minimum_configuration(
+        self, backend: Optional[str] = None
+    ) -> Union[None, Configuration]:
+        """
+        Returns a valid configuration with the fewest selected features (the minimum
+        working configuration).
+
+        ``backend`` selects the analysis plugin; only "sat" implements this operation.
+        """
+        try:
+            model = self._select_backend(backend, Backend.SAT)
+            operation = self.discover_metamodel.get_operation(model, "PySATMinimumConfiguration")
+            operation.execute(model)
+            return operation.get_result()
+        except FlamaException as exception:
+            logger.error("Error: %s", exception)
+            return None
+
+    def attribute_optimization(
+        self, objectives: Any, backend: Optional[str] = None
+    ) -> Union[None, List[Configuration]]:
+        """
+        Returns the configuration(s) that optimize one or more numeric feature attributes.
+
+        ``objectives`` is either a single attribute name (defaults to minimizing it) or a
+        mapping ``{attribute_name: "Minimize"|"Maximize"}``. ``backend`` selects the plugin:
+        "sat" performs single-objective MaxSAT optimization; "z3" additionally supports
+        typed attributes and multi-objective (Pareto) optimization. Defaults to "sat".
+        """
+        def _goal(value: Any) -> OptimizationGoal:
+            return (OptimizationGoal.MINIMIZE
+                    if str(value).lower().startswith('min')
+                    else OptimizationGoal.MAXIMIZE)
+
+        if isinstance(objectives, str):
+            attributes = {objectives: OptimizationGoal.MINIMIZE}
+        else:
+            attributes = {name: _goal(goal) for name, goal in dict(objectives).items()}
+
+        try:
+            model = self._select_backend(backend, Backend.SAT)
+            operation = self.discover_metamodel.get_operation(model, "AttributeOptimization")
+            operation.set_attributes(attributes)
+            operation.execute(model)
+            # z3 returns (configuration, values) tuples; sat returns configurations.
+            return [item[0] if isinstance(item, tuple) else item
+                    for item in operation.get_result()]
         except FlamaException as exception:
             logger.error("Error: %s", exception)
             return None
