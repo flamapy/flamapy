@@ -233,7 +233,7 @@ def test_commonality():
     result = flamafm.commonality(VALID_CONFIG)
 
     # Assert
-    assert 0.0 == 0.0
+    assert result == 1.0
 
 
 def test_valid_configuration():

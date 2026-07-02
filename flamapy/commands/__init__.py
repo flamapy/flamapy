@@ -5,7 +5,7 @@ from functools import wraps
 import inspect
 from pathlib import Path
 from shutil import copytree
-from typing import Any, List, Tuple, Optional
+from typing import Any, List, Tuple, Optional, Union, get_args, get_origin
 from types import FunctionType
 
 from flamapy.interfaces.python.flamapy_feature_model import FLAMAFeatureModel
@@ -92,30 +92,43 @@ def generate_plugin(args):  # type: ignore
     print("Plugin generated!")
 
 
+def resolve_annotation_type(annotation: Any) -> type:
+    """Map a parameter annotation to a concrete type usable as an argparse 'type'.
+
+    Unwraps Optional[X]/Union[X, None] to X; falls back to str for anything
+    that is not a plain class (argparse requires a callable).
+    """
+    if annotation is inspect.Parameter.empty:
+        return str
+    if get_origin(annotation) is Union:
+        args = [arg for arg in get_args(annotation) if arg is not type(None)]
+        annotation = args[0] if args else str
+    return annotation if isinstance(annotation, type) else str
+
+
 def setup_dynamic_commands(subparsers, dynamic_commands):  # type: ignore
     for name, docstring, method, parameters in dynamic_commands:
         subparser = subparsers.add_parser(name, help=docstring)
         subparser.add_argument("model_path", type=str, help="Path to the feature model file")
-        if "configuration_path" in [param.name for param in parameters]:
-            subparser.add_argument(
-                "--configuration_path",
-                type=str,
-                help="Path to the configuration file",
-                required=False,
-            )
         for param in parameters:
             arg_name = param.name
             if arg_name not in ["model_path"]:  # Avoid duplicates
+                arg_type = resolve_annotation_type(param.annotation)
                 if param.default == param.empty:  # Positional argument
+                    subparser.add_argument(arg_name, type=arg_type, help=arg_type.__name__)
+                elif arg_type is bool:  # Boolean flag (type=bool would parse 'False' as True)
                     subparser.add_argument(
-                        arg_name, type=param.annotation, help=param.annotation.__name__
+                        f"--{arg_name}",
+                        action=argparse.BooleanOptionalAction,
+                        default=param.default,
+                        help="Optional bool",
                     )
                 else:  # Optional argument
                     subparser.add_argument(
                         f"--{arg_name}",
-                        type=param.annotation,
+                        type=arg_type,
                         default=param.default,
-                        help=f"Optional {param.annotation.__name__}",
+                        help=f"Optional {arg_type.__name__}",
                     )
         subparser.set_defaults(func=method, method_name=name, parameters=parameters)
 
