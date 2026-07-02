@@ -8,6 +8,18 @@ import pytest
 
 from flamapy.interfaces.python.flamapy_feature_model import FLAMAFeatureModel
 
+# flamapy-sharpsat is an optional extra; skip the sharpsat-backend tests when it is
+# not installed (e.g. the umbrella CI installs flamapy without the sharpsat extra).
+try:
+    import flamapy.metamodels.sharpsat_metamodel  # noqa: F401
+    _SHARPSAT_AVAILABLE = True
+except ImportError:
+    _SHARPSAT_AVAILABLE = False
+
+requires_sharpsat = pytest.mark.skipif(
+    not _SHARPSAT_AVAILABLE, reason="flamapy-sharpsat is not installed"
+)
+
 _ATTRIBUTED_UVL = """features
     Root {abstract}
         optional
@@ -91,6 +103,7 @@ def test_t_wise_sampling_covers_valid_pairs():
 
 # --- sharpsat backend -------------------------------------------------------
 
+@requires_sharpsat
 def test_sharpsat_backend_count_matches_bdd():
     path = _model(_PLAIN_UVL)
     exact = FLAMAFeatureModel(path).configurations_number(backend="bdd")
@@ -98,6 +111,7 @@ def test_sharpsat_backend_count_matches_bdd():
     assert approx == exact
 
 
+@requires_sharpsat
 def test_sharpsat_backend_sampling_returns_valid_configurations():
     path = _model(_PLAIN_UVL)
     fm = FLAMAFeatureModel(path)
