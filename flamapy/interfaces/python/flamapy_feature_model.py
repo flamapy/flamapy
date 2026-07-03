@@ -201,6 +201,7 @@ def _make_operation_method(descriptor: OperationDescriptor) -> Any:
     method.__signature__ = signature  # type: ignore[attr-defined]
     # Let the CLI/REST/tests tell analysis ops from producers/transformers without re-discovering.
     setattr(method, '_facade_kind', descriptor.kind)
+    setattr(method, '_facade_descriptor', descriptor)
     return method
 
 
