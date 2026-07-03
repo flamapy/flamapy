@@ -43,7 +43,7 @@ def _input_annotation(input_spec: Input) -> str:
 
 
 def _method_signature(descriptor: OperationDescriptor) -> str:
-    params = ['self']
+    params = [] if descriptor.kind == 'producer' else ['self']
     for input_spec in descriptor.inputs:
         annotation = _input_annotation(input_spec)
         if input_spec.required:
@@ -61,6 +61,8 @@ def render_stub(operations: 'dict[str, OperationDescriptor] | None' = None) -> s
     lines = [_HEADER.rstrip('\n')]
     for name in sorted(operations):
         descriptor = operations[name]
+        if descriptor.kind == 'producer':
+            lines.append('    @staticmethod')
         lines.append(
             f'    def {name}({_method_signature(descriptor)}) -> {descriptor.returns}: ...')
     return '\n'.join(lines) + '\n'

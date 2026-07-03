@@ -71,8 +71,10 @@ SELECTABLE = {
 
 
 def _facade_operation_methods():
+    # Instance analysis operations only — producers are staticmethods (tested separately).
     return {name for name, _ in inspect.getmembers(FLAMAFeatureModel, predicate=inspect.isfunction)
-            if not name.startswith('_')}
+            if not name.startswith('_')
+            and not isinstance(inspect.getattr_static(FLAMAFeatureModel, name), staticmethod)}
 
 
 def test_expected_table_matches_the_facade_surface():
@@ -115,6 +117,17 @@ def test_every_descriptor_has_doc_and_returns():
     available = DiscoverMetamodels().available_operations()
     assert all((d.doc or '').strip() for d in available.values())
     assert all((d.returns or '').strip() for d in available.values())
+
+
+def test_producer_is_a_static_method():
+    # Model producers (kind='producer') are exposed as @staticmethods, not instance operations.
+    descriptor = DiscoverMetamodels().available_operations()['generate_random_feature_model']
+    assert descriptor.kind == 'producer'
+    raw = inspect.getattr_static(FLAMAFeatureModel, 'generate_random_feature_model')
+    assert isinstance(raw, staticmethod)
+    params = list(inspect.signature(FLAMAFeatureModel.generate_random_feature_model).parameters)
+    assert 'self' not in params
+    assert params == ['num_features', 'max_constraints', 'seed', 'void']
 
 
 def test_type_stub_is_in_sync():

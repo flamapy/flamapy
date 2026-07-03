@@ -82,17 +82,18 @@ class FLAMAFeatureModel:
     ) -> VariabilityModel:
         """Resolve the operation's target model, lazily transforming (and caching) fm->backend.
 
-        fm-level operations (``default_backend is None``) run on the feature model directly.
-        Otherwise the backend is the per-call one > workspace default > the operation's default (for
-        backend-selectable ops), or simply the fixed default. The name is mapped to a transformation
-        extension (only ``sat -> pysat`` differs) and cached per extension.
+        The backend is the per-call one > workspace default > the operation's default (for
+        backend-selectable ops), or simply the fixed default. When it resolves to ``None`` (an
+        fm-level op, or a selectable op with no backend requested) the operation runs on the feature
+        model directly. Otherwise the name is mapped to a transformation extension (only
+        ``sat -> pysat`` differs) and cached per extension.
         """
-        if descriptor.default_backend is None:
-            return self.fm_model
         if descriptor.selectable_backend:
             resolved = backend_arg or self.backend or descriptor.default_backend
         else:
             resolved = descriptor.default_backend
+        if resolved is None:
+            return self.fm_model
         name = resolved.value if isinstance(resolved, Backend) else str(resolved)
         extension = _BACKEND_ALIAS.get(name, name)
         if extension not in self._backend_models:
@@ -133,9 +134,47 @@ class FLAMAFeatureModel:
             return None
 
 
+# One discovery instance, reused to install the operations and to run producers (which have no
+# per-facade instance to hold their own).
+_DISCOVERY = DiscoverMetamodels()
+
+
+def _run_producer(descriptor: OperationDescriptor, call_kwargs: Dict[str, Any]) -> Any:
+    """Run a 'producer' operation — one that *creates* a model instead of analysing one.
+
+    Producers take no input model, so the operation is instantiated directly and executed with no
+    model. Same FlamaException -> None contract as :meth:`FLAMAFeatureModel._run_operation`.
+    """
+    try:
+        operation_class = next(
+            (op for op in _DISCOVERY.get_operations() if op.__name__ == descriptor.operation), None)
+        if operation_class is None:
+            raise FlamaException(f"Operation '{descriptor.operation}' was not discovered")
+        operation = operation_class()
+        for input_spec in descriptor.inputs:
+            value = call_kwargs.get(input_spec.name)
+            if value is not None and input_spec.setter is not None:
+                getattr(operation, input_spec.setter)(value)
+        operation.execute(None)
+        result = operation.get_result()
+        if descriptor.result_adapter is not None:
+            result = descriptor.result_adapter(result)
+        return result
+    except FlamaException as exception:
+        logger.error("Error: %s", exception)
+        return None
+
+
 def _make_operation_method(descriptor: OperationDescriptor) -> Any:
-    """Build a real method (self + declared inputs [+ backend]) dispatching via _run_operation."""
-    parameters = [inspect.Parameter('self', inspect.Parameter.POSITIONAL_OR_KEYWORD)]
+    """Build a real callable from a descriptor.
+
+    Operations become instance methods ``(self, *inputs[, backend])`` dispatching via
+    ``_run_operation``; producers become plain functions ``(*inputs)`` (wrapped as a
+    ``staticmethod`` by the installer) dispatching via ``_run_producer``.
+    """
+    producer = descriptor.kind == 'producer'
+    parameters = [] if producer else [
+        inspect.Parameter('self', inspect.Parameter.POSITIONAL_OR_KEYWORD)]
     for input_spec in descriptor.inputs:
         default = inspect.Parameter.empty if input_spec.required else input_spec.default
         parameters.append(inspect.Parameter(
@@ -147,12 +186,14 @@ def _make_operation_method(descriptor: OperationDescriptor) -> Any:
             annotation=Optional[str]))
     signature = inspect.Signature(parameters)
 
-    def method(self: 'FLAMAFeatureModel', *args: Any, **kwargs: Any) -> Any:
-        bound = signature.bind(self, *args, **kwargs)
+    def method(*args: Any, **kwargs: Any) -> Any:
+        bound = signature.bind(*args, **kwargs)
         bound.apply_defaults()
         call_kwargs = dict(bound.arguments)
-        call_kwargs.pop('self')
-        return self._run_operation(descriptor, call_kwargs)
+        if producer:
+            return _run_producer(descriptor, call_kwargs)
+        instance = call_kwargs.pop('self')
+        return instance._run_operation(descriptor, call_kwargs)
 
     method.__name__ = descriptor.name
     method.__qualname__ = f'{FLAMAFeatureModel.__name__}.{descriptor.name}'
@@ -162,8 +203,9 @@ def _make_operation_method(descriptor: OperationDescriptor) -> Any:
 
 
 def _install_operations(cls: type) -> None:
-    for name, descriptor in DiscoverMetamodels().available_operations().items():
-        setattr(cls, name, _make_operation_method(descriptor))
+    for name, descriptor in _DISCOVERY.available_operations().items():
+        method = _make_operation_method(descriptor)
+        setattr(cls, name, staticmethod(method) if descriptor.kind == 'producer' else method)
 
 
 _install_operations(FLAMAFeatureModel)
