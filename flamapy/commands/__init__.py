@@ -32,8 +32,8 @@ def extract_commands(cls: type) -> List[Tuple[str, str, FunctionType, List[inspe
     for name, method in inspect.getmembers(cls, predicate=inspect.isfunction):
         if name.startswith("_"):
             continue
-        if isinstance(inspect.getattr_static(cls, name), staticmethod):
-            continue  # producer ops (model generators) have no model_path; Python-API only for now
+        if getattr(method, "_facade_kind", "operation") != "operation":
+            continue  # producers/transformers return models; Python-API only for now
         docstring: Optional[str] = method.__doc__
         signature = inspect.signature(method)
         # Exclude 'self' from parameters

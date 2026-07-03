@@ -199,6 +199,8 @@ def _make_operation_method(descriptor: OperationDescriptor) -> Any:
     method.__qualname__ = f'{FLAMAFeatureModel.__name__}.{descriptor.name}'
     method.__doc__ = descriptor.doc
     method.__signature__ = signature  # type: ignore[attr-defined]
+    # Let the CLI/REST/tests tell analysis ops from producers/transformers without re-discovering.
+    setattr(method, '_facade_kind', descriptor.kind)
     return method
 
 

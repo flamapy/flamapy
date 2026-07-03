@@ -71,10 +71,11 @@ SELECTABLE = {
 
 
 def _facade_operation_methods():
-    # Instance analysis operations only — producers are staticmethods (tested separately).
-    return {name for name, _ in inspect.getmembers(FLAMAFeatureModel, predicate=inspect.isfunction)
+    # Instance analysis operations only — producers/transformers (kind != 'operation') are separate.
+    return {name for name, method in
+            inspect.getmembers(FLAMAFeatureModel, predicate=inspect.isfunction)
             if not name.startswith('_')
-            and not isinstance(inspect.getattr_static(FLAMAFeatureModel, name), staticmethod)}
+            and getattr(method, '_facade_kind', 'operation') == 'operation'}
 
 
 def test_expected_table_matches_the_facade_surface():
@@ -128,6 +129,16 @@ def test_producer_is_a_static_method():
     params = list(inspect.signature(FLAMAFeatureModel.generate_random_feature_model).parameters)
     assert 'self' not in params
     assert params == ['num_features', 'max_constraints', 'seed', 'void']
+
+
+def test_transformer_is_a_python_only_instance_method():
+    # Transformers modify + return a model, so they are instance methods kept off CLI/REST.
+    descriptor = DiscoverMetamodels().available_operations()['generate_random_attribute']
+    assert descriptor.kind == 'transformer'
+    raw = inspect.getattr_static(FLAMAFeatureModel, 'generate_random_attribute')
+    assert not isinstance(raw, staticmethod)
+    params = list(inspect.signature(FLAMAFeatureModel.generate_random_attribute).parameters)
+    assert params == ['self', 'name', 'min_value', 'max_value', 'only_leaf_features']
 
 
 def test_type_stub_is_in_sync():
