@@ -8,9 +8,9 @@ class __NAME__TextToModel(TextToModel):
     def get_source_extension() -> str:
         return "__EXT__"
 
-    def __init__(self, path: str, model: __NAME__Model):
+    def __init__(self, path: str):
         self.path = path
-        self.model = model
+        self.model = __NAME__Model()
 
     def transform(self) -> __NAME__Model:
         # TODO: insert your code here
