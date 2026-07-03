@@ -59,6 +59,14 @@ EXPECTED = {
 }
 
 
+# Operations whose facade method exposes a backend= kwarg (backend-selectable).
+SELECTABLE = {
+    'core_features', 'dead_features', 'false_optional_features', 'satisfiable',
+    'configurations_number', 'configurations', 'satisfiable_configuration', 'sampling',
+    'attribute_optimization', 't_wise_sampling', 'minimum_configuration',
+}
+
+
 def _facade_operation_methods():
     return {name for name, _ in inspect.getmembers(FLAMAFeatureModel, predicate=inspect.isfunction)
             if not name.startswith('_')}
@@ -84,3 +92,17 @@ def test_descriptors_match_expected_backend_and_inputs():
         if actual != (backend, input_names):
             mismatches[name] = {'expected': (backend, input_names), 'actual': actual}
     assert not mismatches, mismatches
+
+
+def test_selectable_flag_matches():
+    available = DiscoverMetamodels().available_operations()
+    assert {name for name, d in available.items() if d.selectable_backend} == SELECTABLE
+
+
+def test_generated_method_signatures_match_descriptors():
+    # The descriptor-generated facade methods must expose exactly (self, *inputs[, backend]).
+    for name, (_, input_names) in EXPECTED.items():
+        signature = inspect.signature(getattr(FLAMAFeatureModel, name))
+        params = [p for p in signature.parameters if p != 'self']
+        expected = list(input_names) + (['backend'] if name in SELECTABLE else [])
+        assert params == expected, {'op': name, 'actual': params, 'expected': expected}
