@@ -38,7 +38,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: '3.11'
 
       - name: Install dependencies
         run: |
@@ -53,3 +53,23 @@ jobs:
           rm -rf dist/
           python -m build
           twine upload dist/*
+
+      # Build the bundle of flamapy-authored wheels (flamapy + fw/fm/sat/bdd/z3)
+      # for downstream tools (e.g. the browser IDE running on Pyodide).  Marked
+      # non-fatal so a lagging plugin release on PyPI never blocks the
+      # already-published package/release.
+      - name: Build flamapy wheels bundle
+        id: wheels_bundle
+        continue-on-error: true
+        run: |
+          chmod +x .github/workflows/build_wheels.sh
+          .github/workflows/build_wheels.sh wheels
+          cd wheels && zip "../flamapy-wheels-${{ steps.get_variables.outputs.VERSION }}.zip" *.whl
+
+      - name: Attach wheels bundle to the release
+        if: steps.wheels_bundle.outcome == 'success'
+        uses: softprops/action-gh-release@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          tag_name: ${{ steps.get_variables.outputs.VERSION }}
+          files: flamapy-wheels-${{ steps.get_variables.outputs.VERSION }}.zip

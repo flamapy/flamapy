@@ -65,3 +65,30 @@ def test_cli_operations(operation, model, config, res_type, expected_output):
     elif res_type == "len":
         cleaned_res = str(result.stdout[:-1])
         assert int(expected_output) == int(cleaned_res.count("[") - 1)
+
+
+def test_cli_no_args_overview_grouped_by_metamodel():
+    result = subprocess.run(["flamapy"], capture_output=True, text=True)
+    assert result.returncode == 0
+    lines = result.stdout.splitlines()
+
+    headers = [
+        "Feature model operations (no solver required):",
+        "SAT-based operations (pysat metamodel):",
+        "BDD-based operations (bdd metamodel):",
+        "SMT-based operations (z3 metamodel):",
+        "Diagnosis operations (pysat_diagnosis metamodel):",
+        "Framework developers operations:",
+    ]
+    positions = [lines.index(header) for header in headers]
+    assert positions == sorted(positions)
+
+    # A known operation is listed under its metamodel's section
+    sat_section = lines[lines.index(headers[1]):lines.index(headers[2])]
+    assert any(line.strip().startswith("satisfiable") for line in sat_section)
+
+    # Every non-header, non-empty line is indented: no flush-left docstring spills
+    for line in lines:
+        if line and line not in headers and not line.startswith("Operations marked") \
+                and not line.startswith("Run 'flamapy"):
+            assert line.startswith("  "), f"flush-left line in overview: {line!r}"

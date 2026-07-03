@@ -1,381 +1,214 @@
+"""Descriptor-driven facade over the flamapy analysis operations.
+
+The public operation methods are not written by hand. At import time :func:`_install_operations`
+reads the :class:`OperationDescriptor`s discovered from the installed plugins
+(:meth:`DiscoverMetamodels.available_operations`) and synthesises one method per operation, each
+with a real signature and ``__doc__`` so the CLI and REST layers can keep introspecting the class.
+Dropping a new operation into a plugin therefore extends the Python facade, the CLI and the REST API
+for free. Backend resolution is dynamic (by fm-to-backend transformation extension), so there is no
+per-operation or per-backend code here. Static typing is provided by a generated ``.pyi`` stub.
+"""
+import inspect
 import logging
-from typing import List, Any, Union
+from enum import Enum
+from typing import Any, Dict, Optional, Union
+
 from flamapy.core.discover import DiscoverMetamodels
-from flamapy.metamodels.fm_metamodel.models import FeatureModel
 from flamapy.core.exceptions import FlamaException
+from flamapy.core.models import VariabilityModel
+from flamapy.core.operations import OperationDescriptor
 from flamapy.metamodels.configuration_metamodel.models import Configuration
+from flamapy.metamodels.fm_metamodel.models import FeatureModel
 
 logger = logging.getLogger(__name__)
 
 
+class Backend(str, Enum):
+    """Analysis backend identifier.
+
+    Retained so the REST layer can offer a backend dropdown; the facade itself no longer switches on
+    it — it resolves the backend dynamically to a transformation extension.
+    """
+
+    SAT = "sat"
+    BDD = "bdd"
+    Z3 = "z3"
+    SHARPSAT = "sharpsat"
+
+
+# Facade backend name -> fm-to-backend transformation extension (the only non-identity mapping).
+_BACKEND_ALIAS = {"sat": "pysat"}
+
+
 class FLAMAFeatureModel:
-    def __init__(self, model_path: str):
-        """
-        This is the path in the filesystem where the model is located.
-        Any model in UVL, FaMaXML or FeatureIDE format are accepted
+    """A feature model together with the analysis operations discovered from the installed plugins.
+
+    Operation methods are generated from their OperationDescriptors (see the module docstring); call
+    them as normal methods, e.g. ``FLAMAFeatureModel(path).satisfiable()``.
+    """
+
+    def __init__(self, model_path: str, backend: Optional[str] = None) -> None:
+        """``model_path`` is the filesystem path to the model (UVL, FaMaXML or FeatureIDE).
+
+        ``backend`` optionally sets a workspace-wide default backend ("sat", "bdd" or "z3") for
+        every operation that supports more than one. When left as ``None`` each operation keeps its
+        historical default, so existing code behaves exactly as before.
         """
         self.model_path = model_path
-        """
-        Creating the interface witht he flama framework
-        """
         self.discover_metamodel = DiscoverMetamodels()
-        """
-        We save the model for later ussage
-        """
         self.fm_model = self._read(model_path)
-        """
-        We create a empty sat model and a bdd model to avoid double transformations
-        """
-        self.sat_model = None
-        self.bdd_model = None
+        self.backend = Backend(backend) if backend is not None else None
+        self._backend_models: Dict[str, VariabilityModel] = {}
 
     def _read(self, model_path: str) -> FeatureModel:
         return self.discover_metamodel.use_transformation_t2m(model_path, "fm")
 
-    def _transform_to_sat(self) -> None:
-        if self.sat_model is None:
-            self.sat_model = self.discover_metamodel.use_transformation_m2m(self.fm_model, "pysat")
+    def _as_configuration(
+        self, configuration: Union[str, Dict[str, Any], Configuration]
+    ) -> Configuration:
+        """Resolve a configuration argument into a Configuration model.
 
-    def _transform_to_bdd(self) -> None:
-        if self.bdd_model is None:
-            self.bdd_model = self.discover_metamodel.use_transformation_m2m(self.fm_model, "bdd")
-
-    def atomic_sets(self) -> Union[None, List[List[Any]]]:
+        Accepts a path to a configuration file (read via the configuration transformation), a
+        ``{feature: value}`` mapping, or an already-built Configuration.
         """
-        This operation is used to find the atomic sets in a model:
-        It returns the atomic sets if they are found in the model.
-        If the model does not follow the UVL specification, an
-        exception is raised and the operation returns False.
+        if isinstance(configuration, Configuration):
+            return configuration
+        if isinstance(configuration, dict):
+            return Configuration(configuration)
+        return self.discover_metamodel.use_transformation_t2m(configuration, "configuration")
+
+    def _model_for(
+        self, descriptor: OperationDescriptor, backend_arg: Optional[str]
+    ) -> VariabilityModel:
+        """Resolve the operation's target model, lazily transforming (and caching) fm->backend.
+
+        The backend is the per-call one > workspace default > the operation's default (for
+        backend-selectable ops), or simply the fixed default. When it resolves to ``None`` (an
+        fm-level op, or a selectable op with no backend requested) the operation runs on the feature
+        model directly. Otherwise the name is mapped to a transformation extension (only
+        ``sat -> pysat`` differs) and cached per extension.
         """
+        if descriptor.selectable_backend:
+            resolved = backend_arg or self.backend or descriptor.default_backend
+        else:
+            resolved = descriptor.default_backend
+        if resolved is None:
+            return self.fm_model
+        name = resolved.value if isinstance(resolved, Backend) else str(resolved)
+        extension = _BACKEND_ALIAS.get(name, name)
+        if extension not in self._backend_models:
+            self._backend_models[extension] = self.discover_metamodel.use_transformation_m2m(
+                self.fm_model, extension)
+        return self._backend_models[extension]
 
-        # Try to use the Find operation, which returns the atomic sets if they are found
-        try:
-            atomic_sets = self.discover_metamodel.use_operation(
-                self.fm_model, "FMAtomicSets"
-            ).get_result()
-            result = []
-            for atomic_set in atomic_sets:
-                partial_set = []
-                for feature in atomic_set:
-                    partial_set.append(feature.name)
-                result.append(partial_set)
-            return result
-        except FlamaException as exception:
-            logger.error("Error: %s", exception)
-            return None
+    def _run_operation(
+        self, descriptor: OperationDescriptor, call_kwargs: Dict[str, Any]
+    ) -> Any:
+        """Resolve model + operation, wire inputs, execute, and marshal the result.
 
-    def language_level(self) -> Union[None, Any]:
-        """Return the UVL language level."""
-
-        try:
-            result = self.discover_metamodel.use_operation(
-                self.fm_model, "FMLanguageLevel"
-            ).get_result()
-            return result
-        except FlamaException as exception:
-            print(f"Error: {exception}")
-            return None
-
-    def average_branching_factor(self) -> Union[None, float]:
-        """
-        This refers to the average number of child features that a parent feature has in a
-        feature model. It's calculated by dividing the total number of child features by the
-        total number of parent features. A high average branching factor indicates a complex
-        feature model with many options, while a low average branching factor indicates a
-        simpler model.
-        """
-
-        # Try to use the Find operation, which returns the atomic sets if they are found
-        try:
-            result = self.discover_metamodel.use_operation(
-                self.fm_model, "FMAverageBranchingFactor"
-            ).get_result()
-            return result
-        except FlamaException as exception:
-            logger.error("Error: %s", exception)
-            return None
-
-    def count_leafs(self) -> Union[None, int]:
-        """
-        This operation counts the number of leaf features in a feature model. Leaf features
-        are those that do not have any child features. They represent the most specific
-        options in a product line.
-        """
-
-        # Try to use the Find operation, which returns the atomic sets if they are found
-        try:
-            result = self.discover_metamodel.use_operation(
-                self.fm_model, "FMCountLeafs"
-            ).get_result()
-            return result
-        except FlamaException as exception:
-            logger.error("Error: %s", exception)
-            return None
-
-    def estimated_number_of_configurations(self) -> Union[None, int]:
-        """
-        This is an estimate of the total number of different products that can be produced
-        from a feature model. It's calculated by considering all possible combinations of
-        features. This can be a simple multiplication if all features are independent, but
-        in most cases, constraints and dependencies between features need to be taken
-        into account.
-        """
-
-        # Try to use the Find operation, which returns the atomic sets if they are found
-        try:
-            result = self.discover_metamodel.use_operation(
-                self.fm_model, "FMEstimatedConfigurationsNumber"
-            ).get_result()
-            return result
-        except FlamaException as exception:
-            logger.error("Error: %s", exception)
-            return None
-
-    def feature_ancestors(self, feature_name: str) -> Union[None, List[str]]:
-        """
-        These are the features that are directly or indirectly the parent of a given feature in
-        a feature model. Ancestors of a feature are found by traversing up the feature hierarchy.
-        This information can be useful to understand the context and dependencies of a feature.
-        """
-        # Try to use the Find operation, which returns the atomic sets if they are found
-        try:
-            operation = self.discover_metamodel.get_operation(self.fm_model, "FMFeatureAncestors")
-            operation.set_feature(self.fm_model.get_feature_by_name(feature_name))
-            operation.execute(self.fm_model)
-            flama_result = operation.get_result()
-            result = []
-            for res in flama_result:
-                result.append(res.name)
-            return result
-        except FlamaException as exception:
-            logger.error("Error: %s", exception)
-            return None
-
-    def leaf_features(self) -> Union[None, List[str]]:
-        """
-        This operation is used to find leaf features in a model:
-        It returns the leaf features if they are found in the model.
-        If the model does not follow the UVL specification, an
-        exception is raised and the operation returns False.
-
-        Traditionally you would use the flama tool by
-        features = discover_metamodel.use_operation_from_file('OperationString', model)
-        however, in this tool we know that this operation is from the fm metamodel,
-        so we avoid to execute the transformation if possible
-        """
-
-        # Try to use the operation, which returns the leaf features if they are found
-        try:
-            features = self.discover_metamodel.use_operation(
-                self.fm_model, "FMLeafFeatures"
-            ).get_result()
-            leaf_features = []
-            for feature in features:
-                leaf_features.append(feature.name)
-            return leaf_features
-        except FlamaException as exception:
-            logger.error("Error: %s", exception)
-            return None
-
-    def max_depth(self) -> Union[None, int]:
-        """
-        This operation is used to find the max depth of the tree in a model:
-        It returns the max depth of the tree.
-        If the model does not follow the UVL specification, an
-        exception is raised and the operation returns False.
-        """
-
-        # Try to use the Find operation, which returns the max depth of the tree
-        try:
-            return self.discover_metamodel.use_operation(
-                self.fm_model, "FMMaxDepthTree"
-            ).get_result()
-        except FlamaException as exception:
-            logger.error("Error: %s", exception)
-            return None
-
-    # The methods above rely on sat to be executed.
-    def core_features(self) -> Union[None, List[str]]:
-        """
-        These are the features that are present in all products of a product line.
-        In a feature model, they are the features that are mandatory and not optional.
-        Core features define the commonality among all products in a product line.
-        This call requires sat to be called, however, there is an implementation within
-        flamapy that does not requires sat. please use the framework in case of needing it.
+        Preserves the facade's historical contract: any :class:`FlamaException` is logged and the
+        call returns ``None``.
         """
         try:
-            self._transform_to_sat()
-            features = self.discover_metamodel.use_operation(
-                self.sat_model, "PySATCoreFeatures"
-            ).get_result()
-            return features
-        except FlamaException as exception:
-            logger.error("Error: %s", exception)
-            return None
-
-    def dead_features(self) -> Union[None, List[str]]:
-        """
-        These are features that, due to the constraints and dependencies in the
-        feature model, cannot be included in any valid product. Dead features are usually
-        a sign of an error in the feature model.
-        """
-        try:
-            self._transform_to_sat()
-            features = self.discover_metamodel.use_operation(
-                self.sat_model, "PySATDeadFeatures"
-            ).get_result()
-            return features
-        except FlamaException as exception:
-            logger.error("Error: %s", exception)
-            return None
-
-    def false_optional_features(self) -> Union[None, List[str]]:
-        """
-        These are features that appear to be optional in the feature model, but due to the
-        constraints and dependencies, must be included in every valid product. Like dead features,
-        false optional features are usually a sign of an error in the feature model.
-        """
-        try:
-            self._transform_to_sat()
-            operation = self.discover_metamodel.get_operation(
-                self.sat_model, "PySATFalseOptionalFeatures"
-            )
-            operation.feature_model = self.fm_model
-            operation.execute(self.sat_model)
-            features = operation.get_result()
-            return features
-        except FlamaException as exception:
-            logger.error("Error: %s", exception)
-            return None
-
-    def filter(self, configuration_path: str) -> Union[None, List[Configuration]]:
-        """
-        This operation selects a subset of the products of a product line based on certain
-        criteria. For example, you might filter the products to only include those that
-        contain a certain feature.
-        """
-        try:
-            self._transform_to_sat()
-            configuration = self.discover_metamodel.use_transformation_t2m(
-                configuration_path, "configuration"
-            )
-            operation = self.discover_metamodel.get_operation(self.sat_model, "PySATFilter")
-            operation.set_configuration(configuration)
-            operation.execute(self.sat_model)
+            backend_arg = call_kwargs.pop('backend', None)
+            model = self._model_for(descriptor, backend_arg)
+            operation = self.discover_metamodel.get_operation(model, descriptor.operation)
+            if descriptor.input_adapter is not None:
+                descriptor.input_adapter(operation, self, call_kwargs)
+            else:
+                for input_spec in descriptor.inputs:
+                    value = call_kwargs.get(input_spec.name)
+                    if value is None:
+                        continue
+                    if input_spec.kind == 'configuration':
+                        value = self._as_configuration(value)
+                    if input_spec.setter is not None:
+                        getattr(operation, input_spec.setter)(value)
+            operation.execute(model)
             result = operation.get_result()
+            if descriptor.result_adapter is not None:
+                result = descriptor.result_adapter(result)
             return result
         except FlamaException as exception:
             logger.error("Error: %s", exception)
             return None
 
-    def configurations_number(self, with_sat: bool = False) -> Union[None, int]:
-        """
-        This is the total number of different full configurations that can be
-        produced from a feature model. It's calculated by considering all possible
-        combinations of features, taking into account the constraints and
-        dependencies between features.
-        """
-        try:
-            nop = 0
-            if with_sat:
-                self._transform_to_sat()
-                nop = self.discover_metamodel.use_operation(
-                    self.sat_model, "PySATConfigurationsNumber"
-                ).get_result()
-            else:
-                self._transform_to_bdd()
-                nop = self.discover_metamodel.use_operation(
-                    self.bdd_model, "BDDConfigurationsNumber"
-                ).get_result()
-            return nop
-        except FlamaException as exception:
-            logger.error("Error: %s", exception)
-            return None
 
-    def configurations(self, with_sat: bool = False) -> Union[None, List[Configuration]]:
-        """
-        These are the individual outcomes that can be produced from a feature model. Each product
-        is a combination of features that satisfies all the constraints and dependencies in the
-        feature model.
-        """
-        try:
-            products = []
-            if with_sat:
-                self._transform_to_sat()
-                products = self.discover_metamodel.use_operation(
-                    self.sat_model, "PySATConfigurations"
-                ).get_result()
-            else:
-                self._transform_to_bdd()
-                products = self.discover_metamodel.use_operation(
-                    self.bdd_model, "BDDConfigurations"
-                ).get_result()
-            return products
-        except FlamaException as exception:
-            logger.error("Error: %s", exception)
-            return None
+# One discovery instance, reused to install the operations and to run producers (which have no
+# per-facade instance to hold their own).
+_DISCOVERY = DiscoverMetamodels()
 
-    def commonality(self, configuration_path: str) -> Union[None, float]:
-        """
-        This is a measure of how often a feature appears in the products of a
-        product line. It's usually expressed as a percentage. A feature with
-        100 per cent commonality is a core feature, as it appears in all products.
-        """
-        try:
-            self._transform_to_sat()
-            configuration = self.discover_metamodel.use_transformation_t2m(
-                configuration_path, "configuration"
-            )
 
-            operation = self.discover_metamodel.get_operation(self.sat_model, "PySATCommonality")
-            operation.set_configuration(configuration)
-            operation.execute(self.sat_model)
-            return operation.get_result()
-        except FlamaException as exception:
-            logger.error("Error: %s", exception)
-            return None
+def _run_producer(descriptor: OperationDescriptor, call_kwargs: Dict[str, Any]) -> Any:
+    """Run a 'producer' operation — one that *creates* a model instead of analysing one.
 
-    def satisfiable_configuration(
-        self, configuration_path: str, full_configuration: bool = False
-    ) -> Union[None, bool]:
-        """
-        This is a product that is produced from a valid configuration of features. A valid
-        product satisfies all the constraints and dependencies in the feature model.
-        """
-        try:
-            self._transform_to_sat()
-            configuration = self.discover_metamodel.use_transformation_t2m(
-                configuration_path, "configuration"
-            )
-            operation = self.discover_metamodel.get_operation(
-                self.sat_model, "PySATSatisfiableConfiguration"
-            )
+    Producers take no input model, so the operation is instantiated directly and executed with no
+    model. Same FlamaException -> None contract as :meth:`FLAMAFeatureModel._run_operation`.
+    """
+    try:
+        operation_class = next(
+            (op for op in _DISCOVERY.get_operations() if op.__name__ == descriptor.operation), None)
+        if operation_class is None:
+            raise FlamaException(f"Operation '{descriptor.operation}' was not discovered")
+        operation = operation_class()
+        for input_spec in descriptor.inputs:
+            value = call_kwargs.get(input_spec.name)
+            if value is not None and input_spec.setter is not None:
+                getattr(operation, input_spec.setter)(value)
+        operation.execute(None)
+        result = operation.get_result()
+        if descriptor.result_adapter is not None:
+            result = descriptor.result_adapter(result)
+        return result
+    except FlamaException as exception:
+        logger.error("Error: %s", exception)
+        return None
 
-            if full_configuration:
-                configuration.is_full = True
-            else:
-                configuration.is_full = False
 
-            operation.set_configuration(configuration)
-            operation.execute(self.sat_model)
-            result = operation.get_result()
-            return result
-        except FlamaException as exception:
-            logger.error("Error: %s", exception)
-            return None
+def _make_operation_method(descriptor: OperationDescriptor) -> Any:
+    """Build a real callable from a descriptor.
 
-    def satisfiable(self) -> Union[None, bool]:
-        """
-        In the context of feature models, this usually refers to whether the feature model itself
-        satisfies all the constraints and dependencies. A a valid feature model is one that
-        does encodes at least a single valid product.
-        """
-        try:
-            self._transform_to_sat()
-            result = self.discover_metamodel.use_operation(
-                self.sat_model, "PySATSatisfiable"
-            ).get_result()
-            return result
-        except FlamaException as exception:
-            logger.error("Error: %s", exception)
-            return None
+    Operations become instance methods ``(self, *inputs[, backend])`` dispatching via
+    ``_run_operation``; producers become plain functions ``(*inputs)`` (wrapped as a
+    ``staticmethod`` by the installer) dispatching via ``_run_producer``.
+    """
+    producer = descriptor.kind == 'producer'
+    parameters = [] if producer else [
+        inspect.Parameter('self', inspect.Parameter.POSITIONAL_OR_KEYWORD)]
+    for input_spec in descriptor.inputs:
+        default = inspect.Parameter.empty if input_spec.required else input_spec.default
+        parameters.append(inspect.Parameter(
+            input_spec.name, inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            default=default, annotation=input_spec.type))
+    if descriptor.selectable_backend:
+        parameters.append(inspect.Parameter(
+            'backend', inspect.Parameter.POSITIONAL_OR_KEYWORD, default=None,
+            annotation=Optional[str]))
+    signature = inspect.Signature(parameters)
+
+    def method(*args: Any, **kwargs: Any) -> Any:
+        bound = signature.bind(*args, **kwargs)
+        bound.apply_defaults()
+        call_kwargs = dict(bound.arguments)
+        if producer:
+            return _run_producer(descriptor, call_kwargs)
+        instance = call_kwargs.pop('self')
+        return instance._run_operation(descriptor, call_kwargs)
+
+    method.__name__ = descriptor.name
+    method.__qualname__ = f'{FLAMAFeatureModel.__name__}.{descriptor.name}'
+    method.__doc__ = descriptor.doc
+    method.__signature__ = signature  # type: ignore[attr-defined]
+    # Let the CLI/REST/tests tell analysis ops from producers/transformers without re-discovering.
+    setattr(method, '_facade_kind', descriptor.kind)
+    setattr(method, '_facade_descriptor', descriptor)
+    return method
+
+
+def _install_operations(cls: type) -> None:
+    for name, descriptor in _DISCOVERY.available_operations().items():
+        method = _make_operation_method(descriptor)
+        setattr(cls, name, staticmethod(method) if descriptor.kind == 'producer' else method)
+
+
+_install_operations(FLAMAFeatureModel)
