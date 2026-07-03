@@ -106,3 +106,22 @@ def test_generated_method_signatures_match_descriptors():
         params = [p for p in signature.parameters if p != 'self']
         expected = list(input_names) + (['backend'] if name in SELECTABLE else [])
         assert params == expected, {'op': name, 'actual': params, 'expected': expected}
+
+
+def test_every_descriptor_has_doc_and_returns():
+    available = DiscoverMetamodels().available_operations()
+    assert all((d.doc or '').strip() for d in available.values())
+    assert all((d.returns or '').strip() for d in available.values())
+
+
+def test_type_stub_is_in_sync():
+    # The shipped flamapy_feature_model.pyi must match what the generator produces from the
+    # current descriptors. Regenerate with: python -m flamapy.interfaces.python._stub
+    import pathlib
+
+    from flamapy.interfaces.python import _stub
+
+    stub_path = pathlib.Path(_stub.__file__).with_name('flamapy_feature_model.pyi')
+    assert stub_path.read_text(encoding='utf-8') == _stub.render_stub(), (
+        'flamapy_feature_model.pyi is out of date; regenerate it with '
+        '`python -m flamapy.interfaces.python._stub`')

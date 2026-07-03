@@ -36,6 +36,12 @@ Homepage = "https://github.com/flamapy/flamapy-feature-model"
 [tool.setuptools.packages.find]
 include = ["flamapy.*"]
 
+# Ship the PEP 561 marker + the generated facade type stub so type checkers and IDEs
+# can see the descriptor-generated FLAMAFeatureModel methods.
+[tool.setuptools.package-data]
+"flamapy" = ["py.typed"]
+"flamapy.interfaces.python" = ["flamapy_feature_model.pyi"]
+
 [tool.ruff]
 line-length = 100  # Matches max-line-length from pycodestyle
 target-version = "py311"
@@ -64,6 +70,7 @@ max-complexity = 10  # Equivalent to enabling mccabe in Prospector
 "__pycache__/*" = ["ALL"]
 "skel_metamodel/*" = ["ALL"]
 "flamapy/__init__.py" = ["ALL"]
+"*.pyi" = ["E501"]  # generated type stub: long one-line signatures are fine
 
 [tool.ruff.lint.pycodestyle]
 max-line-length = 100  # Matches your existing pycodestyle setting

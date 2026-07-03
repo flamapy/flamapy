@@ -20,8 +20,6 @@ from flamapy.core.operations import OperationDescriptor
 from flamapy.metamodels.configuration_metamodel.models import Configuration
 from flamapy.metamodels.fm_metamodel.models import FeatureModel
 
-from flamapy.interfaces.python._operation_docs import OPERATION_DOCS
-
 logger = logging.getLogger(__name__)
 
 
@@ -158,7 +156,7 @@ def _make_operation_method(descriptor: OperationDescriptor) -> Any:
 
     method.__name__ = descriptor.name
     method.__qualname__ = f'{FLAMAFeatureModel.__name__}.{descriptor.name}'
-    method.__doc__ = descriptor.doc or OPERATION_DOCS.get(descriptor.name, '')
+    method.__doc__ = descriptor.doc
     method.__signature__ = signature  # type: ignore[attr-defined]
     return method
 
