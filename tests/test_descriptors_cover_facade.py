@@ -128,7 +128,7 @@ def test_producer_is_a_static_method():
     assert isinstance(raw, staticmethod)
     params = list(inspect.signature(FLAMAFeatureModel.generate_random_feature_model).parameters)
     assert 'self' not in params
-    assert params == ['num_features', 'max_constraints', 'seed', 'void']
+    assert params == ['num_features', 'max_constraints', 'seed', 'void', 'language_level']
 
 
 def test_transformer_is_a_python_only_instance_method():
