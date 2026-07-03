@@ -1,6 +1,8 @@
 import argparse
 import os
+import shutil
 import sys
+import textwrap
 from functools import wraps
 import inspect
 from pathlib import Path
@@ -12,6 +14,26 @@ from flamapy.interfaces.python.flamapy_feature_model import FLAMAFeatureModel
 
 # List to store registered commands and their arguments
 MANUAL_COMMANDS: List[Tuple[str, str, FunctionType, Tuple[Any, ...]]] = []
+
+# Section headings for the no-args listing, keyed by the operations' default backend
+# (None => the operation runs directly on the feature model tree). Backends not listed
+# here (future plugins) get their own section headed by the backend name.
+BACKEND_SECTIONS: List[Tuple[Optional[str], str]] = [
+    (None, "Feature model operations (no solver required)"),
+    ("sat", "SAT-based operations (pysat metamodel)"),
+    ("bdd", "BDD-based operations (bdd metamodel)"),
+    ("z3", "SMT-based operations (z3 metamodel)"),
+    ("pysat_diagnosis", "Diagnosis operations (pysat_diagnosis metamodel)"),
+]
+
+
+def _summary(doc: str) -> str:
+    """One-line summary of a docstring: whitespace collapsed, first sentence only."""
+    collapsed = " ".join(doc.split())
+    if not collapsed:
+        return "(no description)"
+    end = collapsed.find(". ")
+    return collapsed[: end + 1] if end != -1 else collapsed
 
 
 def command(name, description, *args):  # type: ignore
@@ -27,7 +49,9 @@ def command(name, description, *args):  # type: ignore
     return decorator
 
 
-def extract_commands(cls: type) -> List[Tuple[str, str, FunctionType, List[inspect.Parameter]]]:
+def extract_commands(
+    cls: type,
+) -> List[Tuple[str, str, FunctionType, List[inspect.Parameter], Any]]:
     commands = []
     for name, method in inspect.getmembers(cls, predicate=inspect.isfunction):
         if name.startswith("_"):
@@ -38,17 +62,17 @@ def extract_commands(cls: type) -> List[Tuple[str, str, FunctionType, List[inspe
         signature = inspect.signature(method)
         # Exclude 'self' from parameters
         parameters = list(signature.parameters.values())[1:]  # Skip 'self'
-        commands.append((name, docstring or "", method, parameters))
+        descriptor = getattr(method, "_facade_descriptor", None)
+        commands.append((name, docstring or "", method, parameters, descriptor))
     return commands
 
 
 @command(
     "generate_plugin",
-    """This command generates a new plugin to implement your
-         cusom operations. To execute it you should set yourself in the path of the
-         flamapy src directory""",
-    ("name", str, "The pluggins name"),
-    ("extension", str, "The extansion to be registered with the flamapy ecosystem"),
+    "Generates a new plugin skeleton to implement your custom operations. "
+    "Run it from the path of the flamapy src directory.",
+    ("name", str, "The plugin's name"),
+    ("extension", str, "The extension to be registered with the flamapy ecosystem"),
     ("path", str, "The path to generate it"),
 )
 def generate_plugin(args):  # type: ignore
@@ -109,8 +133,8 @@ def resolve_annotation_type(annotation: Any) -> type:
 
 
 def setup_dynamic_commands(subparsers, dynamic_commands):  # type: ignore
-    for name, docstring, method, parameters in dynamic_commands:
-        subparser = subparsers.add_parser(name, help=docstring)
+    for name, docstring, method, parameters, _ in dynamic_commands:
+        subparser = subparsers.add_parser(name, help=_summary(docstring), description=docstring)
         subparser.add_argument("model_path", type=str, help="Path to the feature model file")
         for param in parameters:
             arg_name = param.name
@@ -137,7 +161,7 @@ def setup_dynamic_commands(subparsers, dynamic_commands):  # type: ignore
 
 def setup_manual_commands(subparsers, manual_commands):  # type: ignore
     for name, description, func, args in manual_commands:
-        subparser = subparsers.add_parser(name, help=description)
+        subparser = subparsers.add_parser(name, help=_summary(description), description=description)
         for arg in args:
             arg_name, arg_type, arg_help = arg
             subparser.add_argument(arg_name, type=arg_type, help=arg_help)
@@ -172,9 +196,51 @@ def execute_command(args: argparse.Namespace) -> None:
         print(f"Attribute error: {attr_error}")
 
 
+def _print_section(title: str, rows: List[Tuple[str, str]], column: int, width: int) -> None:
+    print(f"{title}:")
+    for label, summary in sorted(rows):
+        lead = f"  {label:<{column}}  "
+        wrapped = textwrap.wrap(summary, width=max(width - len(lead), 20)) or [""]
+        print(lead + wrapped[0])
+        for line in wrapped[1:]:
+            print(" " * len(lead) + line)
+
+
+def print_command_overview(dynamic_commands) -> None:  # type: ignore
+    width = min(shutil.get_terminal_size().columns, 100)
+    rows_by_backend: dict[Optional[str], List[Tuple[str, str]]] = {}
+    for name, docstring, _, _, descriptor in dynamic_commands:
+        backend = getattr(descriptor, "default_backend", None)
+        label = name + (" *" if getattr(descriptor, "selectable_backend", False) else "")
+        rows_by_backend.setdefault(backend, []).append((label, _summary(docstring)))
+    manual_rows = [(name, _summary(description)) for name, description, _, _ in MANUAL_COMMANDS]
+
+    all_rows = [row for rows in rows_by_backend.values() for row in rows] + manual_rows
+    column = max((len(label) for label, _ in all_rows), default=0)
+
+    sections = list(BACKEND_SECTIONS)
+    known = {backend for backend, _ in sections}
+    sections += [(backend, f"Operations on the {backend} backend")
+                 for backend in sorted(rows_by_backend.keys() - known, key=str)]
+    first = True
+    for backend, title in sections:
+        rows = rows_by_backend.get(backend)
+        if not rows:
+            continue
+        if not first:
+            print()
+        _print_section(title, rows, column, width)
+        first = False
+    print()
+    _print_section("Framework developers operations", manual_rows, column, width)
+    print()
+    print("Operations marked with * accept a --backend option to pick the solver.")
+    print("Run 'flamapy <command> --help' for details, or 'flamapy --help' for the full list.")
+
+
 def flamapy_cli() -> None:
     parser = argparse.ArgumentParser(description="FLAMA Feature Model CLI")
-    subparsers = parser.add_subparsers(dest="command")
+    subparsers = parser.add_subparsers(dest="command", metavar="COMMAND", title="commands")
 
     dynamic_commands = extract_commands(FLAMAFeatureModel)
     setup_dynamic_commands(subparsers, dynamic_commands)
@@ -185,10 +251,4 @@ def flamapy_cli() -> None:
     if args.command:
         execute_command(args)
     else:
-        print("Feature model operations:")
-        for name, docstring, _, _ in dynamic_commands:
-            print(f"  {name}: {docstring}")
-        print("Framework developers operations:")
-        for name, description, _, _ in MANUAL_COMMANDS:
-            print(f"  {name}: {description}")
-        print("Execute flamapy --help for more information")
+        print_command_overview(dynamic_commands)
