@@ -56,6 +56,9 @@ EXPECTED = {
                   ('configuration_path', 'test_case_path', 'max_diagnoses')),
     'conflict': ('pysat_diagnosis',
                  ('configuration_path', 'test_case_path', 'max_conflicts')),
+    'configuration_conflict': ('pysat_diagnosis', ('configuration_path',)),
+    'configuration_repair': ('pysat_diagnosis', ('configuration_path',)),
+    'feature_explanation': ('pysat_diagnosis', ('configuration_path', 'feature_name')),
 }
 
 
