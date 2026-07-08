@@ -37,7 +37,11 @@ class Backend(str, Enum):
     SAT = "sat"
     BDD = "bdd"
     Z3 = "z3"
+    # Optional backends, installed via the flamapy extras of the same name
+    # (e.g. pip install "flamapy[sharpsat]", or "flamapy[all-solvers]" for all three).
     SHARPSAT = "sharpsat"
+    SDD = "sdd"
+    DNNF = "dnnf"
 
 
 # Facade backend name -> fm-to-backend transformation extension (the only non-identity mapping).
@@ -54,9 +58,11 @@ class FLAMAFeatureModel:
     def __init__(self, model_path: str, backend: Optional[str] = None) -> None:
         """``model_path`` is the filesystem path to the model (UVL, FaMaXML or FeatureIDE).
 
-        ``backend`` optionally sets a workspace-wide default backend ("sat", "bdd" or "z3") for
-        every operation that supports more than one. When left as ``None`` each operation keeps its
-        historical default, so existing code behaves exactly as before.
+        ``backend`` optionally sets a workspace-wide default backend ("sat", "bdd" or "z3",
+        plus "sharpsat"/"sdd"/"dnnf" when the corresponding optional flamapy extra is
+        installed) for every operation that supports more than one. When left as ``None``
+        each operation keeps its historical default, so existing code behaves exactly as
+        before.
         """
         self.model_path = model_path
         self.discover_metamodel = DiscoverMetamodels()

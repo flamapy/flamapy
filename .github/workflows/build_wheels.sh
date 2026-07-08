@@ -22,6 +22,9 @@
 #   - flamapy-configurator (not published on PyPI)
 #   - python-sat (provided by the Pyodide package set)
 #   - z3_solver (the prebuilt wasm32 wheel, tied to the Pyodide version)
+#   - the optional solver extras (flamapy-sharpsat/-dnnf/-sdd, since 2.7): only the
+#     default dependency set is bundled. Revisit here if the IDE grows a UI for the
+#     optional backends (release-day checklist item).
 #
 # Usage:
 #   ./build_wheels.sh [OUTPUT_DIR]

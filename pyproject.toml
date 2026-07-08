@@ -19,6 +19,16 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Optional solver backends: not part of the default install, selectable per call
+# (e.g. backend='sharpsat') or per model (FLAMAFeatureModel(path, backend=...)).
+sharpsat = ["flamapy-sharpsat~=2.7.0.dev0"]
+dnnf = ["flamapy-dnnf~=2.7.0.dev0"]
+sdd = ["flamapy-sdd~=2.7.0.dev0"]
+all-solvers = [
+    "flamapy-sharpsat~=2.7.0.dev0",
+    "flamapy-dnnf~=2.7.0.dev0",
+    "flamapy-sdd~=2.7.0.dev0",
+]
 dev = [
     "pytest",
     "pytest-mock",
