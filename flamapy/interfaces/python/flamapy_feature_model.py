@@ -13,10 +13,13 @@ import logging
 from enum import Enum
 from typing import Any, Dict, Optional, Union
 
+import dataclasses
+
 from flamapy.core.discover import DiscoverMetamodels
-from flamapy.core.exceptions import FlamaException
+from flamapy.core.exceptions import FlamaException, PluginNotFound
+from flamapy.core.execution import run_and_wrap
 from flamapy.core.models import VariabilityModel
-from flamapy.core.operations import OperationDescriptor
+from flamapy.core.operations import OperationDescriptor, OperationResult
 from flamapy.metamodels.configuration_metamodel.models import Configuration
 from flamapy.metamodels.fm_metamodel.models import FeatureModel
 
@@ -59,6 +62,10 @@ class FLAMAFeatureModel:
         self.fm_model = self._read(model_path)
         self.backend = Backend(backend) if backend is not None else None
         self._backend_models: Dict[str, VariabilityModel] = {}
+        # Provenance envelope of the last executed operation (value, plugin, backend, exact,
+        # wall time, model hash). Purely informational in 2.7; methods still return bare
+        # values. In 3.0 the envelope becomes the return type.
+        self.last_result: Optional[OperationResult] = None
 
     def _read(self, model_path: str) -> FeatureModel:
         return self.discover_metamodel.use_transformation_t2m(model_path, "fm")
@@ -109,6 +116,7 @@ class FLAMAFeatureModel:
         Preserves the facade's historical contract: any :class:`FlamaException` is logged and the
         call returns ``None``.
         """
+        self.last_result = None
         try:
             backend_arg = call_kwargs.pop('backend', None)
             model = self._model_for(descriptor, backend_arg)
@@ -124,13 +132,25 @@ class FLAMAFeatureModel:
                         value = self._as_configuration(value)
                     if input_spec.setter is not None:
                         getattr(operation, input_spec.setter)(value)
-            operation.execute(model)
-            result = operation.get_result()
+            # The hash is always the source feature model's (memoized there), whichever
+            # backend model the operation actually runs on.
+            envelope = run_and_wrap(
+                operation, model,
+                operation_name=descriptor.name, plugin=self._plugin_name_for(model),
+                model_hash=self.fm_model.canonical_hash())
             if descriptor.result_adapter is not None:
-                result = descriptor.result_adapter(result)
-            return result
+                envelope = dataclasses.replace(
+                    envelope, value=descriptor.result_adapter(envelope.value))
+            self.last_result = envelope
+            return envelope.value
         except FlamaException as exception:
             logger.error("Error: %s", exception)
+            return None
+
+    def _plugin_name_for(self, model: VariabilityModel) -> Optional[str]:
+        try:
+            return self.discover_metamodel.plugins.get_plugin_by_variability_model(model).name
+        except PluginNotFound:
             return None
 
 

@@ -158,6 +158,9 @@ def setup_dynamic_commands(subparsers, dynamic_commands):  # type: ignore
                         default=param.default,
                         help=f"Optional {arg_type.__name__}",
                     )
+        subparser.add_argument(
+            "-v", "--verbose", action="store_true",
+            help="Also print the result's provenance (plugin, backend, exact, wall time)")
         subparser.set_defaults(func=method, method_name=name, parameters=parameters)
 
 
@@ -180,6 +183,14 @@ def execute_command(args: argparse.Namespace) -> None:
             result = method(**command_args)
             if result is not None:
                 print(result)
+            if getattr(args, "verbose", False) and cls_instance.last_result is not None:
+                envelope = cls_instance.last_result
+                print("--- provenance ---", file=sys.stderr)
+                print(f"operation: {envelope.operation}  plugin: {envelope.plugin}  "
+                      f"backend: {envelope.backend}", file=sys.stderr)
+                print(f"exact: {envelope.exact}  wall_time: {envelope.wall_time:.6f}s",
+                      file=sys.stderr)
+                print(f"model_hash: {envelope.model_hash}", file=sys.stderr)
         else:
             func = args.func
             command_args = {k: v for k, v in vars(args).items() if k != "func"}
