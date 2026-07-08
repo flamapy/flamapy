@@ -52,6 +52,8 @@ EXPECTED = {
     'all_feature_bounds': ('z3', ()),
     'feature_bounds': ('z3', ('variable_name',)),
     # diagnosis operations
+    'explain_dead_feature': ('pysat_diagnosis', ('feature_name',)),
+    'explain_void_model': ('pysat_diagnosis', ()),
     'diagnosis': ('pysat_diagnosis',
                   ('configuration_path', 'test_case_path', 'max_diagnoses')),
     'conflict': ('pysat_diagnosis',
