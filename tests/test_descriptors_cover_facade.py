@@ -38,6 +38,9 @@ EXPECTED = {
     'commonality': ('sat', ('configuration_path',)),
     'backbone': ('sat', ()),
     't_wise_sampling': ('sat', ('t',)),
+    'covering_array': ('sat', ('t', 'seed')),
+    'coverage': ('sat', ('configurations', 't')),
+    'sample_reduction': ('sat', ('configurations', 't')),
     'minimum_configuration': ('sat', ()),
     # bespoke bdd operations
     'homogeneity': ('bdd', ()),
