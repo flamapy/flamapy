@@ -10,6 +10,7 @@ per-operation or per-backend code here. Static typing is provided by a generated
 """
 import inspect
 import logging
+import os
 from enum import Enum
 from typing import Any, Dict, Optional, Union
 
@@ -20,9 +21,14 @@ from flamapy.core.discover import DiscoverMetamodels
 from flamapy.core.exceptions import FlamaException, PluginNotFound
 from flamapy.core.execution import run_and_wrap
 from flamapy.core.models import VariabilityModel
+from flamapy.core.models.language_level import LanguageLevel
 from flamapy.core.operations import OperationDescriptor, OperationResult
+from flamapy.core.planner import Plan, plan as plan_backend
 from flamapy.metamodels.configuration_metamodel.models import Configuration
 from flamapy.metamodels.fm_metamodel.models import FeatureModel
+from flamapy.metamodels.fm_metamodel.operations.fm_language_level import (
+    calculate_language_level,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +48,10 @@ class Backend(str, Enum):
     SHARPSAT = "sharpsat"
     SDD = "sdd"
     DNNF = "dnnf"
+    # Opt-in: let the query planner pick the backend per operation, from the plugins'
+    # capability manifests (language level, scale, cost). Also enabled process-wide by
+    # setting FLAMAPY_BACKEND=auto. Becomes the default in flamapy 3.0.
+    AUTO = "auto"
 
 
 # Facade backend name -> fm-to-backend transformation extension (the only non-identity mapping).
@@ -73,6 +83,10 @@ class FLAMAFeatureModel:
         # wall time, model hash). Purely informational in 2.7; methods still return bare
         # values. In 3.0 the envelope becomes the return type.
         self.last_result: Optional[OperationResult] = None
+        # How the last operation's backend was chosen: None (historical default),
+        # 'explicit', or 'auto: <planner rationale>'.
+        self._last_planner: Optional[str] = None
+        self._model_language_level: Optional[LanguageLevel] = None
 
     def _read(self, model_path: str) -> FeatureModel:
         return self.discover_metamodel.use_transformation_t2m(model_path, "fm")
@@ -96,24 +110,66 @@ class FLAMAFeatureModel:
     ) -> VariabilityModel:
         """Resolve the operation's target model, lazily transforming (and caching) fm->backend.
 
-        The backend is the per-call one > workspace default > the operation's default (for
-        backend-selectable ops), or simply the fixed default. When it resolves to ``None`` (an
-        fm-level op, or a selectable op with no backend requested) the operation runs on the feature
-        model directly. Otherwise the name is mapped to a transformation extension (only
+        The backend is the per-call one > workspace default > the ``FLAMAPY_BACKEND``
+        environment variable > the operation's default (for backend-selectable ops), or
+        simply the fixed default. The value ``'auto'`` (opt-in) hands the choice to the
+        query planner. When the backend resolves to ``None`` (an fm-level op, or a
+        selectable op with no backend requested) the operation runs on the feature model
+        directly. Otherwise the name is mapped to a transformation extension (only
         ``sat -> pysat`` differs) and cached per extension.
         """
+        self._last_planner = None
         if descriptor.selectable_backend:
-            resolved = backend_arg or self.backend or descriptor.default_backend
+            resolved = (backend_arg or self.backend
+                        or os.environ.get('FLAMAPY_BACKEND') or descriptor.default_backend)
         else:
             resolved = descriptor.default_backend
         if resolved is None:
             return self.fm_model
         name = resolved.value if isinstance(resolved, Backend) else str(resolved)
+        if name == Backend.AUTO.value and descriptor.selectable_backend:
+            return self._model_via_planner(descriptor)
+        if backend_arg or self.backend or os.environ.get('FLAMAPY_BACKEND'):
+            self._last_planner = 'explicit'
         extension = _BACKEND_ALIAS.get(name, name)
+        return self._backend_model(extension)
+
+    def _backend_model(self, extension: str) -> VariabilityModel:
+        if extension == self.fm_model.get_extension():
+            return self.fm_model
         if extension not in self._backend_models:
             self._backend_models[extension] = self.discover_metamodel.use_transformation_m2m(
                 self.fm_model, extension)
         return self._backend_models[extension]
+
+    def _language_level(self) -> LanguageLevel:
+        if self._model_language_level is None:
+            self._model_language_level = calculate_language_level(self.fm_model)
+        return self._model_language_level
+
+    def _plan_operation(self, operation_name: str) -> Plan:
+        """Ask the query planner which backend should run ``operation_name`` on this model."""
+        edges = [(t.get_source_extension(), t.get_destination_extension())
+                 for t in self.discover_metamodel.get_transformations_m2m()]
+        return plan_backend(
+            operation_name,
+            source_extension=self.fm_model.get_extension(),
+            model_level=self._language_level(),
+            n_features=len(self.fm_model.get_features()),
+            plugins=self.discover_metamodel.plugins,
+            m2m_edges=edges,
+        )
+
+    def _model_via_planner(self, descriptor: OperationDescriptor) -> VariabilityModel:
+        chosen = self._plan_operation(descriptor.name)
+        self._last_planner = f'auto: {chosen.rationale}'
+        model = self.fm_model
+        for _, destination in chosen.transformation_chain:
+            if destination not in self._backend_models:
+                self._backend_models[destination] = (
+                    self.discover_metamodel.use_transformation_m2m(model, destination))
+            model = self._backend_models[destination]
+        return model
 
     def _run_operation(
         self, descriptor: OperationDescriptor, call_kwargs: Dict[str, Any]
@@ -148,6 +204,8 @@ class FLAMAFeatureModel:
             if descriptor.result_adapter is not None:
                 envelope = dataclasses.replace(
                     envelope, value=descriptor.result_adapter(envelope.value))
+            if self._last_planner is not None:
+                envelope = dataclasses.replace(envelope, planner=self._last_planner)
             self.last_result = envelope
             return envelope.value
         except FlamaException as exception:

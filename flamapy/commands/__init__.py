@@ -10,6 +10,7 @@ from shutil import copytree
 from typing import Any, List, Tuple, Optional, Union, get_args, get_origin
 from types import FunctionType
 
+from flamapy.core.exceptions import FlamaException
 from flamapy.interfaces.python.flamapy_feature_model import FLAMAFeatureModel
 
 # List to store registered commands and their arguments
@@ -65,6 +66,32 @@ def extract_commands(
         descriptor = getattr(method, "_facade_descriptor", None)
         commands.append((name, docstring or "", method, parameters, descriptor))
     return commands
+
+
+@command(
+    "plan",
+    "Shows which backend the query planner would pick for an operation on a model. "
+    "The planner is opt-in: run operations with --backend auto (or FLAMAPY_BACKEND=auto) "
+    "to actually use it.",
+    ("operation", str, "Facade operation name, e.g. configurations_number"),
+    ("model_path", str, "Path to the feature model file"),
+)
+def plan_command(args):  # type: ignore
+    fm = FLAMAFeatureModel(args.model_path)
+    try:
+        chosen = fm._plan_operation(args.operation)  # pylint: disable=protected-access
+    except FlamaException as error:
+        print(f"No compatible backend: {error}")
+        return None
+    chain = " -> ".join([fm.fm_model.get_extension()]
+                        + [destination for _, destination in chosen.transformation_chain])
+    print(f"operation:            {args.operation}")
+    print(f"chosen backend:       {chosen.plugin_name} (extension '{chosen.target_extension}')")
+    print(f"transformation chain: {chain}")
+    print(f"rationale:            {chosen.rationale}")
+    if chosen.alternatives:
+        print(f"alternatives:         {', '.join(chosen.alternatives)}")
+    return None
 
 
 @command(
