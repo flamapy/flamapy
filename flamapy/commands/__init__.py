@@ -108,7 +108,9 @@ def generate_plugin(args):  # type: ignore
             lines = file.readlines()
         with open(copy_file, "w", encoding="utf-8") as filewrite:
             for line in lines:
-                out_line = line.replace("__NAME__", name.capitalize()).replace("__EXT__", ext)
+                out_line = (line.replace("__NAME_LOWER__", name)
+                            .replace("__NAME__", name.capitalize())
+                            .replace("__EXT__", ext))
                 filewrite.write(out_line)
 
     os.rename(

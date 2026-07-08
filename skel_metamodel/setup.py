@@ -24,5 +24,12 @@ setuptools.setup(
     install_requires=[
         # Add your requires here
     ],
+    entry_points={
+        # Registers the plugin with flamapy's discovery (the namespace-scan
+        # fallback is deprecated and will be removed in flamapy 3.1).
+        "flamapy.plugins": [
+            "__EXT__ = flamapy.metamodels.__NAME_LOWER__",
+        ],
+    },
     dependency_links=["https://github.com/flamapy/core/tarball/master#egg=package-1.0"],
 )
