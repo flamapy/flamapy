@@ -75,6 +75,31 @@ def test_attribute_optimization_sat_matches_z3():
     assert {frozenset(_sel(c)) for c in sat} == {frozenset(_sel(c)) for c in z3}
 
 
+_PARETO_UVL = """features
+    Root {abstract}
+        optional
+            A {Cost 3, Value 10}
+            B {Cost 5, Value 20}
+            C {Cost 2, Value 1}
+constraints
+    A | B
+"""
+
+
+def test_attribute_optimization_z3_multi_objective_pareto():
+    # Two conflicting objectives: the Pareto front must include both single-objective
+    # optima among its non-dominated configurations.
+    fm = FLAMAFeatureModel(_model(_PARETO_UVL))
+    front = fm.attribute_optimization(
+        {"Cost": "Minimize", "Value": "Maximize"}, backend="z3")
+    selections = {frozenset(_sel(c)) for c in front}
+    fm2 = FLAMAFeatureModel(_model(_PARETO_UVL))
+    min_cost = fm2.attribute_optimization({"Cost": "Minimize"}, backend="z3")
+    max_value = fm2.attribute_optimization({"Value": "Maximize"}, backend="z3")
+    assert {frozenset(_sel(c)) for c in min_cost} <= selections
+    assert {frozenset(_sel(c)) for c in max_value} <= selections
+
+
 # --- minimum configuration --------------------------------------------------
 
 def test_minimum_configuration():
