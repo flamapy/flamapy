@@ -14,6 +14,7 @@ from enum import Enum
 from typing import Any, Dict, Optional, Union
 
 import dataclasses
+import warnings
 
 from flamapy.core.discover import DiscoverMetamodels
 from flamapy.core.exceptions import FlamaException, PluginNotFound
@@ -145,6 +146,10 @@ class FLAMAFeatureModel:
             return envelope.value
         except FlamaException as exception:
             logger.error("Error: %s", exception)
+            warnings.warn(
+                "Returning None on operation errors is deprecated: flamapy 3.0 will raise "
+                "the FlamaException instead. Catch FlamaException rather than checking for "
+                "None.", DeprecationWarning, stacklevel=3)
             return None
 
     def _plugin_name_for(self, model: VariabilityModel) -> Optional[str]:
@@ -182,6 +187,10 @@ def _run_producer(descriptor: OperationDescriptor, call_kwargs: Dict[str, Any]) 
         return result
     except FlamaException as exception:
         logger.error("Error: %s", exception)
+        warnings.warn(
+            "Returning None on operation errors is deprecated: flamapy 3.0 will raise "
+            "the FlamaException instead. Catch FlamaException rather than checking for "
+            "None.", DeprecationWarning, stacklevel=3)
         return None
 
 
