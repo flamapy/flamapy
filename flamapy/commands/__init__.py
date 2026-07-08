@@ -95,6 +95,27 @@ def plan_command(args):  # type: ignore
 
 
 @command(
+    "cache",
+    "Inspects or clears the compilation-artifact cache (opt-in: set FLAMAPY_CACHE=1 to "
+    "cache compiled backends such as BDDs across runs).",
+    ("action", str, "'info' or 'clear'"),
+)
+def cache_command(args):  # type: ignore
+    from flamapy.core import cache as artifact_cache  # noqa: PLC0415
+
+    if args.action == "info":
+        stats = artifact_cache.info()
+        print(f"enabled:   {stats['enabled']} (set FLAMAPY_CACHE=1 to enable)")
+        print(f"directory: {stats['directory']}")
+        print(f"artifacts: {stats['artifacts']} ({stats['size_mb']} MB)")
+    elif args.action == "clear":
+        removed = artifact_cache.clear()
+        print(f"removed {removed} artifact(s)")
+    else:
+        print(f"Unknown cache action '{args.action}'; use 'info' or 'clear'.")
+
+
+@command(
     "generate_plugin",
     "Generates a new plugin skeleton to implement your custom operations. "
     "Run it from the path of the flamapy src directory.",
@@ -200,6 +221,17 @@ def setup_manual_commands(subparsers, manual_commands):  # type: ignore
         subparser.set_defaults(func=func)
 
 
+def _print_provenance(envelope) -> None:  # type: ignore
+    print("--- provenance ---", file=sys.stderr)
+    print(f"operation: {envelope.operation}  plugin: {envelope.plugin}  "
+          f"backend: {envelope.backend}", file=sys.stderr)
+    print(f"exact: {envelope.exact}  wall_time: {envelope.wall_time:.6f}s  "
+          f"cache_hit: {envelope.cache_hit}", file=sys.stderr)
+    if envelope.planner is not None:
+        print(f"planner: {envelope.planner}", file=sys.stderr)
+    print(f"model_hash: {envelope.model_hash}", file=sys.stderr)
+
+
 def execute_command(args: argparse.Namespace) -> None:
     try:
         if hasattr(args, "method_name"):
@@ -211,13 +243,7 @@ def execute_command(args: argparse.Namespace) -> None:
             if result is not None:
                 print(result)
             if getattr(args, "verbose", False) and cls_instance.last_result is not None:
-                envelope = cls_instance.last_result
-                print("--- provenance ---", file=sys.stderr)
-                print(f"operation: {envelope.operation}  plugin: {envelope.plugin}  "
-                      f"backend: {envelope.backend}", file=sys.stderr)
-                print(f"exact: {envelope.exact}  wall_time: {envelope.wall_time:.6f}s",
-                      file=sys.stderr)
-                print(f"model_hash: {envelope.model_hash}", file=sys.stderr)
+                _print_provenance(cls_instance.last_result)
         else:
             func = args.func
             command_args = {k: v for k, v in vars(args).items() if k != "func"}

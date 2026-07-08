@@ -17,6 +17,7 @@ from typing import Any, Dict, Optional, Union
 import dataclasses
 import warnings
 
+from flamapy.core import cache as artifact_cache
 from flamapy.core.discover import DiscoverMetamodels
 from flamapy.core.exceptions import FlamaException, PluginNotFound
 from flamapy.core.execution import run_and_wrap
@@ -151,6 +152,7 @@ class FLAMAFeatureModel:
         """Ask the query planner which backend should run ``operation_name`` on this model."""
         edges = [(t.get_source_extension(), t.get_destination_extension())
                  for t in self.discover_metamodel.get_transformations_m2m()]
+        model_hash = self.fm_model.canonical_hash()
         return plan_backend(
             operation_name,
             source_extension=self.fm_model.get_extension(),
@@ -158,6 +160,7 @@ class FLAMAFeatureModel:
             n_features=len(self.fm_model.get_features()),
             plugins=self.discover_metamodel.plugins,
             m2m_edges=edges,
+            artifact_available=lambda ext: artifact_cache.available_for(model_hash, ext),
         )
 
     def _model_via_planner(self, descriptor: OperationDescriptor) -> VariabilityModel:
@@ -206,6 +209,8 @@ class FLAMAFeatureModel:
                     envelope, value=descriptor.result_adapter(envelope.value))
             if self._last_planner is not None:
                 envelope = dataclasses.replace(envelope, planner=self._last_planner)
+            if getattr(model, '_flamapy_cache_hit', False):
+                envelope = dataclasses.replace(envelope, cache_hit=True)
             self.last_result = envelope
             return envelope.value
         except FlamaException as exception:
