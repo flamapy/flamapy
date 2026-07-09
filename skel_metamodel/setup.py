@@ -26,7 +26,7 @@ setuptools.setup(
     ],
     entry_points={
         # Registers the plugin with flamapy's discovery (the namespace-scan
-        # fallback is deprecated and will be removed in flamapy 3.1).
+        # fallback is deprecated and will be removed in flamapy 3.0).
         "flamapy.plugins": [
             "__EXT__ = flamapy.metamodels.__NAME_LOWER__",
         ],
