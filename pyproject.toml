@@ -4,30 +4,30 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "flamapy"
-version = "2.8.0.dev0"
+version = "2.9.0.dev0"
 description = "Flamapy feature model is a distribution of the flama framework containing all plugins required to analyze feature models. It also offers a richer API and a complete command line interface and documentation."
 readme = "README.md"
 license = "GPL-3.0-or-later"
 authors = [{ name = "Flamapy", email = "flamapy@us.es" }]
 requires-python = ">=3.11"
 dependencies = [
-    "flamapy-fw~=2.8.0.dev0",
-    "flamapy-fm~=2.8.0.dev0",
-    "flamapy-sat~=2.8.0.dev0",
-    "flamapy-bdd~=2.8.0.dev0",
-    "flamapy-z3~=2.8.0.dev0",
+    "flamapy-fw~=2.9.0.dev0",
+    "flamapy-fm~=2.9.0.dev0",
+    "flamapy-sat~=2.9.0.dev0",
+    "flamapy-bdd~=2.9.0.dev0",
+    "flamapy-z3~=2.9.0.dev0",
 ]
 
 [project.optional-dependencies]
 # Optional solver backends: not part of the default install, selectable per call
 # (e.g. backend='sharpsat') or per model (FLAMAFeatureModel(path, backend=...)).
-sharpsat = ["flamapy-sharpsat~=2.8.0.dev0"]
-dnnf = ["flamapy-dnnf~=2.8.0.dev0"]
-sdd = ["flamapy-sdd~=2.8.0.dev0"]
+sharpsat = ["flamapy-sharpsat~=2.9.0.dev0"]
+dnnf = ["flamapy-dnnf~=2.9.0.dev0"]
+sdd = ["flamapy-sdd~=2.9.0.dev0"]
 all-solvers = [
-    "flamapy-sharpsat~=2.8.0.dev0",
-    "flamapy-dnnf~=2.8.0.dev0",
-    "flamapy-sdd~=2.8.0.dev0",
+    "flamapy-sharpsat~=2.9.0.dev0",
+    "flamapy-dnnf~=2.9.0.dev0",
+    "flamapy-sdd~=2.9.0.dev0",
 ]
 dev = [
     "pytest",
