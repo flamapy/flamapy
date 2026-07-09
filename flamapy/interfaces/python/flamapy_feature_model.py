@@ -12,7 +12,7 @@ import inspect
 import logging
 import os
 from enum import Enum
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, Iterator, Optional, Union
 
 import dataclasses
 import warnings
@@ -20,10 +20,14 @@ import warnings
 from flamapy.core import cache as artifact_cache
 from flamapy.core.discover import DiscoverMetamodels
 from flamapy.core.exceptions import FlamaException, PluginNotFound
-from flamapy.core.execution import run_and_wrap
+from flamapy.core.execution import Job, default_engine, run_and_wrap
 from flamapy.core.models import VariabilityModel
 from flamapy.core.models.language_level import LanguageLevel
-from flamapy.core.operations import OperationDescriptor, OperationResult
+from flamapy.core.operations import (
+    OperationDescriptor,
+    OperationResult,
+    StreamingOperation,
+)
 from flamapy.core.planner import Plan, plan as plan_backend
 from flamapy.metamodels.configuration_metamodel.models import Configuration
 from flamapy.metamodels.fm_metamodel.models import FeatureModel
@@ -174,6 +178,26 @@ class FLAMAFeatureModel:
             model = self._backend_models[destination]
         return model
 
+    def _prepare_operation(
+        self, descriptor: OperationDescriptor, backend_arg: Optional[str],
+        call_kwargs: Dict[str, Any],
+    ) -> tuple[Any, VariabilityModel]:
+        """Resolve the target model and a fully input-wired operation instance."""
+        model = self._model_for(descriptor, backend_arg)
+        operation = self.discover_metamodel.get_operation(model, descriptor.operation)
+        if descriptor.input_adapter is not None:
+            descriptor.input_adapter(operation, self, call_kwargs)
+        else:
+            for input_spec in descriptor.inputs:
+                value = call_kwargs.get(input_spec.name)
+                if value is None:
+                    continue
+                if input_spec.kind == 'configuration':
+                    value = self._as_configuration(value)
+                if input_spec.setter is not None:
+                    getattr(operation, input_spec.setter)(value)
+        return operation, model
+
     def _run_operation(
         self, descriptor: OperationDescriptor, call_kwargs: Dict[str, Any]
     ) -> Any:
@@ -185,19 +209,7 @@ class FLAMAFeatureModel:
         self.last_result = None
         try:
             backend_arg = call_kwargs.pop('backend', None)
-            model = self._model_for(descriptor, backend_arg)
-            operation = self.discover_metamodel.get_operation(model, descriptor.operation)
-            if descriptor.input_adapter is not None:
-                descriptor.input_adapter(operation, self, call_kwargs)
-            else:
-                for input_spec in descriptor.inputs:
-                    value = call_kwargs.get(input_spec.name)
-                    if value is None:
-                        continue
-                    if input_spec.kind == 'configuration':
-                        value = self._as_configuration(value)
-                    if input_spec.setter is not None:
-                        getattr(operation, input_spec.setter)(value)
+            operation, model = self._prepare_operation(descriptor, backend_arg, call_kwargs)
             # The hash is always the source feature model's (memoized there), whichever
             # backend model the operation actually runs on.
             envelope = run_and_wrap(
@@ -226,6 +238,43 @@ class FLAMAFeatureModel:
             return self.discover_metamodel.plugins.get_plugin_by_variability_model(model).name
         except PluginNotFound:
             return None
+
+    def run_async(self, operation: str, **kwargs: Any) -> Job:
+        """Run a facade operation asynchronously; returns a :class:`Job` immediately.
+
+        ``operation`` is the facade name (e.g. ``'configurations_number'``); ``kwargs``
+        are the same arguments the synchronous method takes (including ``backend=``).
+        ``job.result(timeout=...)`` waits for the value, raising ``OperationTimeout`` on
+        expiry (after requesting cooperative cancellation) — unlike the 2.x synchronous
+        methods, errors are **raised**, not swallowed into ``None``.
+        """
+        method = getattr(type(self), operation, None)
+        descriptor = getattr(method, '_facade_descriptor', None)
+        if descriptor is None or getattr(method, '_facade_kind', None) != 'operation':
+            raise FlamaException(f"'{operation}' is not a facade analysis operation.")
+        call_kwargs = dict(kwargs)
+        backend_arg = call_kwargs.pop('backend', None)
+        prepared, model = self._prepare_operation(descriptor, backend_arg, call_kwargs)
+        return default_engine().submit(
+            prepared, model,
+            operation_name=descriptor.name, plugin=self._plugin_name_for(model),
+            model_hash=self.fm_model.canonical_hash(),
+            result_adapter=descriptor.result_adapter)
+
+    def iter_configurations(self, backend: Optional[str] = None) -> Iterator[Configuration]:
+        """Iterate the valid configurations, yielding each as the solver produces it.
+
+        Unlike :meth:`configurations` (whose historical default is bdd), the backend
+        defaults to ``sat`` — the streaming-capable implementation. Non-streaming
+        backends fall back to full enumeration first. Same errors contract as
+        :meth:`run_async` (raises, never ``None``).
+        """
+        descriptor = type(self).configurations._facade_descriptor  # type: ignore[attr-defined]
+        operation, model = self._prepare_operation(descriptor, backend or 'sat', {})
+        if isinstance(operation, StreamingOperation):
+            return operation.iter_execute(model)
+        operation.execute(model)
+        return iter(operation.get_result())
 
 
 # One discovery instance, reused to install the operations and to run producers (which have no
@@ -308,5 +357,10 @@ def _install_operations(cls: type) -> None:
         method = _make_operation_method(descriptor)
         setattr(cls, name, staticmethod(method) if descriptor.kind == 'producer' else method)
 
+
+# Async/streaming API methods, not descriptor-generated operations: the CLI generator and
+# the descriptor lock test filter on _facade_kind != 'operation'.
+FLAMAFeatureModel.run_async._facade_kind = 'api'  # type: ignore[attr-defined]
+FLAMAFeatureModel.iter_configurations._facade_kind = 'api'  # type: ignore[attr-defined]
 
 _install_operations(FLAMAFeatureModel)

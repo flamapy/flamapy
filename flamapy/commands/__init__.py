@@ -209,6 +209,9 @@ def setup_dynamic_commands(subparsers, dynamic_commands):  # type: ignore
         subparser.add_argument(
             "-v", "--verbose", action="store_true",
             help="Also print the result's provenance (plugin, backend, exact, wall time)")
+        subparser.add_argument(
+            "--timeout", type=float, default=None, metavar="SECONDS",
+            help="Abort if the operation exceeds this wall-clock time (exit code 124)")
         subparser.set_defaults(func=method, method_name=name, parameters=parameters)
 
 
@@ -219,6 +222,23 @@ def setup_manual_commands(subparsers, manual_commands):  # type: ignore
             arg_name, arg_type, arg_help = arg
             subparser.add_argument(arg_name, type=arg_type, help=arg_help)
         subparser.set_defaults(func=func)
+
+
+def _run_with_timeout(cls_instance, method_name, command_args, timeout):  # type: ignore
+    """Run the operation asynchronously and enforce the wall-clock deadline (exit 124)."""
+    from flamapy.core.exceptions import OperationTimeout  # noqa: PLC0415
+
+    try:
+        job = cls_instance.run_async(method_name, **command_args)
+        result = job.result(timeout=timeout)
+    except OperationTimeout as error:
+        print(f"Timeout: {error}", file=sys.stderr)
+        sys.exit(124)
+    except FlamaException as error:
+        print(f"Error: {error}", file=sys.stderr)
+        return None
+    cls_instance.last_result = job.envelope()
+    return result
 
 
 def _print_provenance(envelope) -> None:  # type: ignore
@@ -232,18 +252,36 @@ def _print_provenance(envelope) -> None:  # type: ignore
     print(f"model_hash: {envelope.model_hash}", file=sys.stderr)
 
 
+def _execute_dynamic(args: argparse.Namespace) -> None:
+    cls_instance = FLAMAFeatureModel(args.model_path)
+    method_parameters = [param.name for param in args.parameters]
+    command_args = {k: v for k, v in vars(args).items() if k in method_parameters}
+    descriptor = getattr(
+        getattr(type(cls_instance), args.method_name), "_facade_descriptor", None)
+    timeout = getattr(args, "timeout", None)
+    if timeout is not None:
+        result = _run_with_timeout(cls_instance, args.method_name, command_args, timeout)
+    elif (getattr(descriptor, "streaming", False)
+            and args.method_name == "configurations"
+            and command_args.get("backend") == "sat"):
+        # Explicitly-chosen streaming backend: print each configuration as the
+        # solver produces it (the default bdd output is unchanged).
+        for configuration in cls_instance.iter_configurations(backend="sat"):
+            print(configuration)
+        result = None
+    else:
+        method = getattr(cls_instance, args.method_name)
+        result = method(**command_args)
+    if result is not None:
+        print(result)
+    if getattr(args, "verbose", False) and cls_instance.last_result is not None:
+        _print_provenance(cls_instance.last_result)
+
+
 def execute_command(args: argparse.Namespace) -> None:
     try:
         if hasattr(args, "method_name"):
-            cls_instance = FLAMAFeatureModel(args.model_path)
-            method_parameters = [param.name for param in args.parameters]
-            command_args = {k: v for k, v in vars(args).items() if k in method_parameters}
-            method = getattr(cls_instance, args.method_name)
-            result = method(**command_args)
-            if result is not None:
-                print(result)
-            if getattr(args, "verbose", False) and cls_instance.last_result is not None:
-                _print_provenance(cls_instance.last_result)
+            _execute_dynamic(args)
         else:
             func = args.func
             command_args = {k: v for k, v in vars(args).items() if k != "func"}
