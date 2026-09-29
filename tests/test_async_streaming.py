@@ -1,9 +1,10 @@
 """The additive async + streaming facade API (v2.9 / Track A phase 6)."""
 import subprocess
+import time
 
 import pytest
 
-from flamapy.core.exceptions import FlamaException
+from flamapy.core.exceptions import FlamaException, OperationTimeout
 from flamapy.interfaces.python.flamapy_feature_model import FLAMAFeatureModel
 
 VALID_MODEL = './resources/models/simple/valid_model.uvl'
@@ -36,6 +37,32 @@ def test_run_async_rejects_non_operations():
         fm.run_async('run_async')
     with pytest.raises(FlamaException):
         fm.run_async('no_such_operation')
+
+
+def test_run_async_timeout_covers_the_backend_transformation(monkeypatch):
+    # The fm -> backend transformation (e.g. BDD compilation, the expensive step on large
+    # models) must run inside the job, so run_async returns at once and the deadline
+    # covers it.
+    original_model_for = FLAMAFeatureModel._model_for
+
+    def slow_model_for(self, *args, **kwargs):
+        time.sleep(2)
+        return original_model_for(self, *args, **kwargs)
+
+    monkeypatch.setattr(FLAMAFeatureModel, '_model_for', slow_model_for)
+    fm = FLAMAFeatureModel(VALID_MODEL)
+    start = time.perf_counter()
+    job = fm.run_async('configurations_number')
+    assert time.perf_counter() - start < 1
+    with pytest.raises(OperationTimeout):
+        job.result(timeout=0.2)
+
+
+def test_run_async_raises_preparation_errors_from_the_job():
+    fm = FLAMAFeatureModel(VALID_MODEL)
+    job = fm.run_async('configurations_number', backend='no_such_backend')
+    with pytest.raises(FlamaException):
+        job.result(timeout=30)
 
 
 def test_iter_configurations_streams_and_matches_full_enumeration():

@@ -11,6 +11,7 @@ per-operation or per-backend code here. Static typing is provided by a generated
 import inspect
 import logging
 import os
+import threading
 from enum import Enum
 from typing import Any, Dict, Iterator, Optional, Union
 
@@ -19,8 +20,8 @@ import warnings
 
 from flamapy.core import cache as artifact_cache
 from flamapy.core.discover import DiscoverMetamodels
-from flamapy.core.exceptions import FlamaException, PluginNotFound
-from flamapy.core.execution import Job, default_engine, run_and_wrap
+from flamapy.core.exceptions import FlamaException, OperationTimeout, PluginNotFound
+from flamapy.core.execution import Interruptible, Job, default_engine, run_and_wrap
 from flamapy.core.models import VariabilityModel
 from flamapy.core.models.language_level import LanguageLevel
 from flamapy.core.operations import (
@@ -247,6 +248,11 @@ class FLAMAFeatureModel:
         ``job.result(timeout=...)`` waits for the value, raising ``OperationTimeout`` on
         expiry (after requesting cooperative cancellation) — unlike the 2.x synchronous
         methods, errors are **raised**, not swallowed into ``None``.
+
+        Everything after resolving the operation name runs inside the job — including the
+        fm->backend transformation (e.g. BDD compilation, often the expensive step on large
+        models) — so the timeout covers it and preparation errors (unknown backend,
+        invalid inputs) are raised by ``job.result()``.
         """
         method = getattr(type(self), operation, None)
         descriptor = getattr(method, '_facade_descriptor', None)
@@ -254,12 +260,22 @@ class FLAMAFeatureModel:
             raise FlamaException(f"'{operation}' is not a facade analysis operation.")
         call_kwargs = dict(kwargs)
         backend_arg = call_kwargs.pop('backend', None)
-        prepared, model = self._prepare_operation(descriptor, backend_arg, call_kwargs)
-        return default_engine().submit(
-            prepared, model,
-            operation_name=descriptor.name, plugin=self._plugin_name_for(model),
-            model_hash=self.fm_model.canonical_hash(),
-            result_adapter=descriptor.result_adapter)
+
+        def task(interrupt_event: threading.Event) -> OperationResult[Any]:
+            prepared, model = self._prepare_operation(descriptor, backend_arg, call_kwargs)
+            if interrupt_event.is_set():
+                # The deadline expired (or cancel() was called) during preparation: the
+                # caller has already given up, so don't start the operation at all.
+                raise OperationTimeout(
+                    f"'{descriptor.name}' was cancelled before execution started.")
+            if isinstance(prepared, Interruptible):
+                prepared.set_interrupt_event(interrupt_event)
+            return run_and_wrap(
+                prepared, model,
+                operation_name=descriptor.name, plugin=self._plugin_name_for(model),
+                model_hash=self.fm_model.canonical_hash())
+
+        return default_engine().submit_call(task, result_adapter=descriptor.result_adapter)
 
     def iter_configurations(self, backend: Optional[str] = None) -> Iterator[Configuration]:
         """Iterate the valid configurations, yielding each as the solver produces it.
