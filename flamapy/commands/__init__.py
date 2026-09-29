@@ -284,7 +284,6 @@ def execute_command(args: argparse.Namespace) -> None:
             _execute_dynamic(args)
         else:
             func = args.func
-            command_args = {k: v for k, v in vars(args).items() if k != "func"}
             result = func(args)
             if result is not None:
                 print(result)
