@@ -113,12 +113,15 @@ def test_selectable_flag_matches():
 
 
 def test_generated_method_signatures_match_descriptors():
-    # The descriptor-generated facade methods must expose exactly (self, *inputs[, backend]).
+    # The descriptor-generated facade methods must expose exactly
+    # (self, *inputs[, backend, *, allow_approximate]).
     for name, (_, input_names) in EXPECTED.items():
         signature = inspect.signature(getattr(FLAMAFeatureModel, name))
         params = [p for p in signature.parameters if p != 'self']
-        expected = list(input_names) + (['backend'] if name in SELECTABLE else [])
+        expected = list(input_names) + (['backend', 'allow_approximate'] if name in SELECTABLE else [])
         assert params == expected, {'op': name, 'actual': params, 'expected': expected}
+        if name in SELECTABLE:
+            assert signature.parameters['allow_approximate'].kind is inspect.Parameter.KEYWORD_ONLY
 
 
 def test_every_descriptor_has_doc_and_returns():

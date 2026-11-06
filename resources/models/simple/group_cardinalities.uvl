@@ -1,0 +1,12 @@
+features
+	root
+		optional
+			"test 1"
+				[1..2]
+					"test 2"
+					"test 3"
+				[3..4]
+					"test 4"
+					"test 5"
+					"test 6"
+					"test 7"

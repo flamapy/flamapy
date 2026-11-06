@@ -71,7 +71,8 @@ class FLAMAFeatureModel:
     them as normal methods, e.g. ``FLAMAFeatureModel(path).satisfiable()``.
     """
 
-    def __init__(self, model_path: str, backend: Optional[str] = None) -> None:
+    def __init__(self, model_path: str, backend: Optional[str] = None,
+                 allow_approximate: bool = False) -> None:
         """``model_path`` is the filesystem path to the model (UVL, FaMaXML or FeatureIDE).
 
         ``backend`` optionally sets a workspace-wide default backend ("sat", "bdd" or "z3",
@@ -79,11 +80,18 @@ class FLAMAFeatureModel:
         installed) for every operation that supports more than one. When left as ``None``
         each operation keeps its historical default, so existing code behaves exactly as
         before.
+
+        ``allow_approximate`` lets the ``'auto'`` backend choose approximate implementations
+        (e.g. sharpsat's ApproxMC counting, or the structural core features that ignore
+        cross-tree constraints); by default the planner only picks exact ones. Also settable
+        process-wide with ``FLAMAPY_ALLOW_APPROXIMATE=1`` and per call with
+        ``allow_approximate=True``.
         """
         self.model_path = model_path
         self.discover_metamodel = DiscoverMetamodels()
         self.fm_model = self._read(model_path)
         self.backend = Backend(backend) if backend is not None else None
+        self.allow_approximate = allow_approximate
         self._backend_models: Dict[str, VariabilityModel] = {}
         # Provenance envelope of the last executed operation (value, plugin, backend, exact,
         # wall time, model hash). Purely informational in 2.7; methods still return bare
@@ -112,7 +120,8 @@ class FLAMAFeatureModel:
         return self.discover_metamodel.use_transformation_t2m(configuration, "configuration")
 
     def _model_for(
-        self, descriptor: OperationDescriptor, backend_arg: Optional[str]
+        self, descriptor: OperationDescriptor, backend_arg: Optional[str],
+        allow_approximate: Optional[bool] = None,
     ) -> VariabilityModel:
         """Resolve the operation's target model, lazily transforming (and caching) fm->backend.
 
@@ -134,7 +143,7 @@ class FLAMAFeatureModel:
             return self.fm_model
         name = resolved.value if isinstance(resolved, Backend) else str(resolved)
         if name == Backend.AUTO.value and descriptor.selectable_backend:
-            return self._model_via_planner(descriptor)
+            return self._model_via_planner(descriptor, self._approximate_allowed(allow_approximate))
         if backend_arg or self.backend or os.environ.get('FLAMAPY_BACKEND'):
             self._last_planner = 'explicit'
         extension = _BACKEND_ALIAS.get(name, name)
@@ -153,8 +162,20 @@ class FLAMAFeatureModel:
             self._model_language_level = calculate_language_level(self.fm_model)
         return self._model_language_level
 
-    def _plan_operation(self, operation_name: str) -> Plan:
-        """Ask the query planner which backend should run ``operation_name`` on this model."""
+    def _approximate_allowed(self, per_call: Optional[bool]) -> bool:
+        """Per-call flag > the model's setting > the FLAMAPY_ALLOW_APPROXIMATE variable."""
+        if per_call is not None:
+            return per_call
+        if self.allow_approximate:
+            return True
+        return os.environ.get('FLAMAPY_ALLOW_APPROXIMATE', '').strip().lower() in (
+            '1', 'true', 'yes', 'on')
+
+    def _plan_operation(self, operation_name: str, allow_approximate: bool = False) -> Plan:
+        """Ask the query planner which backend should run ``operation_name`` on this model.
+
+        The backend models this facade has already built count as free for the planner.
+        """
         edges = [(t.get_source_extension(), t.get_destination_extension())
                  for t in self.discover_metamodel.get_transformations_m2m()]
         model_hash = self.fm_model.canonical_hash()
@@ -166,10 +187,13 @@ class FLAMAFeatureModel:
             plugins=self.discover_metamodel.plugins,
             m2m_edges=edges,
             artifact_available=lambda ext: artifact_cache.available_for(model_hash, ext),
+            available_models=set(self._backend_models),
+            allow_approximate=allow_approximate,
         )
 
-    def _model_via_planner(self, descriptor: OperationDescriptor) -> VariabilityModel:
-        chosen = self._plan_operation(descriptor.name)
+    def _model_via_planner(self, descriptor: OperationDescriptor,
+                           allow_approximate: bool = False) -> VariabilityModel:
+        chosen = self._plan_operation(descriptor.name, allow_approximate)
         self._last_planner = f'auto: {chosen.rationale}'
         model = self.fm_model
         for _, destination in chosen.transformation_chain:
@@ -181,10 +205,10 @@ class FLAMAFeatureModel:
 
     def _prepare_operation(
         self, descriptor: OperationDescriptor, backend_arg: Optional[str],
-        call_kwargs: Dict[str, Any],
+        call_kwargs: Dict[str, Any], allow_approximate: Optional[bool] = None,
     ) -> tuple[Any, VariabilityModel]:
         """Resolve the target model and a fully input-wired operation instance."""
-        model = self._model_for(descriptor, backend_arg)
+        model = self._model_for(descriptor, backend_arg, allow_approximate)
         operation = self.discover_metamodel.get_operation(model, descriptor.operation)
         if descriptor.input_adapter is not None:
             descriptor.input_adapter(operation, self, call_kwargs)
@@ -210,7 +234,9 @@ class FLAMAFeatureModel:
         self.last_result = None
         try:
             backend_arg = call_kwargs.pop('backend', None)
-            operation, model = self._prepare_operation(descriptor, backend_arg, call_kwargs)
+            allow_approximate = call_kwargs.pop('allow_approximate', None)
+            operation, model = self._prepare_operation(
+                descriptor, backend_arg, call_kwargs, allow_approximate)
             # The hash is always the source feature model's (memoized there), whichever
             # backend model the operation actually runs on.
             envelope = run_and_wrap(
@@ -260,9 +286,11 @@ class FLAMAFeatureModel:
             raise FlamaException(f"'{operation}' is not a facade analysis operation.")
         call_kwargs = dict(kwargs)
         backend_arg = call_kwargs.pop('backend', None)
+        allow_approximate = call_kwargs.pop('allow_approximate', None)
 
         def task(interrupt_event: threading.Event) -> OperationResult[Any]:
-            prepared, model = self._prepare_operation(descriptor, backend_arg, call_kwargs)
+            prepared, model = self._prepare_operation(
+                descriptor, backend_arg, call_kwargs, allow_approximate)
             if interrupt_event.is_set():
                 # The deadline expired (or cancel() was called) during preparation: the
                 # caller has already given up, so don't start the operation at all.
@@ -347,6 +375,10 @@ def _make_operation_method(descriptor: OperationDescriptor) -> Any:
         parameters.append(inspect.Parameter(
             'backend', inspect.Parameter.POSITIONAL_OR_KEYWORD, default=None,
             annotation=Optional[str]))
+        # Only meaningful under backend='auto': let the planner pick approximate backends.
+        parameters.append(inspect.Parameter(
+            'allow_approximate', inspect.Parameter.KEYWORD_ONLY, default=None,
+            annotation=Optional[bool]))
     signature = inspect.Signature(parameters)
 
     def method(*args: Any, **kwargs: Any) -> Any:
