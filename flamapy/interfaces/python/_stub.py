@@ -37,9 +37,13 @@ class FLAMAFeatureModel:
     model_path: str
     fm_model: FeatureModel
     backend: Optional[Backend]
+    allow_approximate: bool
+    raise_errors: bool
     last_result: Optional[OperationResult[Any]]
-    def __init__(self, model_path: str, backend: Optional[str] = ...) -> None: ...
-    def _plan_operation(self, operation_name: str) -> Plan: ...
+    def __init__(self, model_path: str, backend: Optional[str] = ...,
+                 allow_approximate: bool = ..., raise_errors: bool = ...) -> None: ...
+    def plan(self, operation: str, allow_approximate: Optional[bool] = ...) -> Plan: ...
+    def _plan_operation(self, operation_name: str, allow_approximate: bool = ...) -> Plan: ...
     def run_async(self, operation: str, **kwargs: Any) -> Any: ...
     def iter_configurations(self, backend: Optional[str] = ...) -> Any: ...
 '''
@@ -62,6 +66,8 @@ def _method_signature(descriptor: OperationDescriptor) -> str:
             params.append(f'{input_spec.name}: {annotation} = ...')
     if descriptor.selectable_backend:
         params.append('backend: Optional[str] = ...')
+        params.append('*')
+        params.append('allow_approximate: Optional[bool] = ...')
     return ', '.join(params)
 
 

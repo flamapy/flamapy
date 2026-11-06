@@ -121,3 +121,25 @@ def test_models_already_built_cost_nothing_to_the_planner():
     after = fm._plan_operation('configurations_number')
     assert 'bdd model already built' in after.rationale
     assert after.estimated_cost < before.estimated_cost
+
+
+def test_plan_is_public_and_only_for_selectable_operations():
+    from flamapy.core.exceptions import FlamaException
+
+    fm = FLAMAFeatureModel(VALID_MODEL)
+    chosen = fm.plan('configurations_number')
+    assert chosen.target_extension == 'bdd'
+    assert fm.plan('core_features', allow_approximate=True).plugin_name == 'pysat_metamodel'
+    with pytest.raises(FlamaException):
+        fm.plan('explain_void_model')  # fixed backend: nothing to plan
+
+
+def test_raise_errors_opts_into_the_3_0_contract():
+    from flamapy.core.exceptions import FlamaException
+
+    lenient = FLAMAFeatureModel(VALID_MODEL)
+    assert lenient.satisfiable(backend='sharpsat_is_not_a_backend') is None
+    strict = FLAMAFeatureModel(VALID_MODEL, raise_errors=True)
+    with pytest.raises(FlamaException):
+        strict.satisfiable(backend='sharpsat_is_not_a_backend')
+    assert strict.satisfiable() is True

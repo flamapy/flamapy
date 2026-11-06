@@ -72,7 +72,7 @@ class FLAMAFeatureModel:
     """
 
     def __init__(self, model_path: str, backend: Optional[str] = None,
-                 allow_approximate: bool = False) -> None:
+                 allow_approximate: bool = False, raise_errors: bool = False) -> None:
         """``model_path`` is the filesystem path to the model (UVL, FaMaXML or FeatureIDE).
 
         ``backend`` optionally sets a workspace-wide default backend ("sat", "bdd" or "z3",
@@ -86,12 +86,16 @@ class FLAMAFeatureModel:
         cross-tree constraints); by default the planner only picks exact ones. Also settable
         process-wide with ``FLAMAPY_ALLOW_APPROXIMATE=1`` and per call with
         ``allow_approximate=True``.
+
+        ``raise_errors`` opts into the 3.0 error contract today: a failing operation raises
+        its ``FlamaException`` instead of logging it and returning ``None``.
         """
         self.model_path = model_path
         self.discover_metamodel = DiscoverMetamodels()
         self.fm_model = self._read(model_path)
         self.backend = Backend(backend) if backend is not None else None
         self.allow_approximate = allow_approximate
+        self.raise_errors = raise_errors
         self._backend_models: Dict[str, VariabilityModel] = {}
         # Provenance envelope of the last executed operation (value, plugin, backend, exact,
         # wall time, model hash). Purely informational in 2.7; methods still return bare
@@ -191,6 +195,22 @@ class FLAMAFeatureModel:
             allow_approximate=allow_approximate,
         )
 
+    def plan(self, operation: str, allow_approximate: Optional[bool] = None) -> Plan:
+        """Which backend ``backend='auto'`` would run ``operation`` on this model, and why.
+
+        Returns the planner's :class:`~flamapy.core.planner.Plan` (plugin, target extension,
+        transformation chain, rationale, estimated cost in ms, alternatives) without running
+        anything. Raises :class:`~flamapy.core.exceptions.NoCompatibleBackendError` when no
+        installed plugin can run the operation on this model, and ``FlamaException`` when
+        ``operation`` is not a backend-selectable facade operation. ``allow_approximate``
+        falls back to the model's setting and the environment, like the operations do.
+        """
+        method = getattr(type(self), operation, None)
+        descriptor = getattr(method, '_facade_descriptor', None)
+        if descriptor is None or not descriptor.selectable_backend:
+            raise FlamaException(f"'{operation}' is not a backend-selectable facade operation.")
+        return self._plan_operation(operation, self._approximate_allowed(allow_approximate))
+
     def _model_via_planner(self, descriptor: OperationDescriptor,
                            allow_approximate: bool = False) -> VariabilityModel:
         chosen = self._plan_operation(descriptor.name, allow_approximate)
@@ -253,6 +273,8 @@ class FLAMAFeatureModel:
             self.last_result = envelope
             return envelope.value
         except FlamaException as exception:
+            if self.raise_errors:
+                raise
             logger.error("Error: %s", exception)
             warnings.warn(
                 "Returning None on operation errors is deprecated: flamapy 3.0 will raise "
@@ -408,6 +430,7 @@ def _install_operations(cls: type) -> None:
 
 # Async/streaming API methods, not descriptor-generated operations: the CLI generator and
 # the descriptor lock test filter on _facade_kind != 'operation'.
+FLAMAFeatureModel.plan._facade_kind = 'api'  # type: ignore[attr-defined]
 FLAMAFeatureModel.run_async._facade_kind = 'api'  # type: ignore[attr-defined]
 FLAMAFeatureModel.iter_configurations._facade_kind = 'api'  # type: ignore[attr-defined]
 

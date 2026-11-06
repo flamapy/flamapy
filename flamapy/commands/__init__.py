@@ -79,7 +79,7 @@ def extract_commands(
 def plan_command(args):  # type: ignore
     fm = FLAMAFeatureModel(args.model_path)
     try:
-        chosen = fm._plan_operation(args.operation)  # pylint: disable=protected-access
+        chosen = fm.plan(args.operation)
     except FlamaException as error:
         print(f"No compatible backend: {error}")
         return None
