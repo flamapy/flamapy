@@ -74,6 +74,7 @@ SELECTABLE = {
     'core_features', 'dead_features', 'false_optional_features', 'satisfiable',
     'configurations_number', 'configurations', 'satisfiable_configuration', 'sampling',
     'attribute_optimization', 't_wise_sampling', 'minimum_configuration',
+    'commonality', 'atomic_sets',
 }
 
 

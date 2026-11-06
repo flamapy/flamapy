@@ -232,8 +232,8 @@ def test_commonality():
     # Act
     result = flamafm.commonality(VALID_CONFIG)
 
-    # Assert
-    assert result == 1.0
+    # Assert: 68 of the 816 configurations include the partial configuration
+    assert abs(result - 68 / 816) < 1e-12
 
 
 def test_valid_configuration():

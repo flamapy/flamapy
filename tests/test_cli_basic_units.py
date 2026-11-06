@@ -50,7 +50,8 @@ def _test_cli_op(operation: str, model: str, config: str = None):
         ("false_optional_features", VALID_MODEL, None, "list", "[]"),
         ("filter", VALID_MODEL, VALID_CONFIG, "len", "68"),
         ("configurations_number", VALID_MODEL, None, "int", "816"),
-        ("commonality", VALID_MODEL, VALID_CONFIG, "float", "1.0"),
+        # 68 of the 816 configurations include the partial configuration (FLAME commonality).
+        ("commonality", VALID_MODEL, VALID_CONFIG, "float", "0.08333333333333333"),
         ("satisfiable_configuration", VALID_MODEL, VALID_CONFIG, "bool", "True"),
         ("satisfiable", VALID_MODEL, None, "bool", "True"),
     ],
