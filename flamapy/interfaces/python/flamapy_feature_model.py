@@ -63,9 +63,9 @@ class Backend(str, Enum):
 # Facade backend name -> fm-to-backend transformation extension (the only non-identity mapping).
 _BACKEND_ALIAS = {"sat": "pysat"}
 
-# Operations that ran on a fixed backend in 2.8 and accept ``backend=`` since 2.9. In 2.x only a
+# Operations that ran on a fixed backend in 2.6 and accept ``backend=`` since 2.9. In 2.x only a
 # per-call ``backend=`` changes them: the workspace default and FLAMAPY_BACKEND do not, so code
-# that set a default backend in 2.8 keeps the same results (the default would otherwise move
+# that set a default backend in 2.6 keeps the same results (the default would otherwise move
 # atomic sets from the tree to SAT, or send commonality to a backend without it). 3.0 applies
 # the defaults to them like to every other selectable operation.
 _SELECTABLE_SINCE_2_9 = frozenset({'atomic_sets', 'commonality'})
@@ -122,7 +122,7 @@ class FLAMAFeatureModel:
         self.raise_errors = raise_errors
         self._backend_models: Dict[str, VariabilityModel] = {}
         # Provenance envelope of the last executed operation (value, plugin, backend, exact,
-        # wall time, model hash). Purely informational in 2.7; methods still return bare
+        # wall time, model hash). Purely informational in 2.9; methods still return bare
         # values. In 3.0 the envelope becomes the return type.
         self.last_result: Optional[OperationResult] = None
         # How the last operation's backend was chosen: None (historical default),

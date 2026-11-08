@@ -1,5 +1,6 @@
-"""2.9 keeps the 2.8 behaviour of existing calls; the new knobs follow the facade's precedence
-rules (per call > model > environment), and the manifests agree with the operation classes."""
+"""2.9, the release after 2.6.0, keeps the 2.6 behaviour of existing calls; the new knobs follow
+the facade's precedence rules (per call > model > environment), and the manifests agree with the
+operation classes."""
 import importlib
 
 import pytest
