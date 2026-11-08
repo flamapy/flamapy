@@ -143,7 +143,8 @@ def test_producer_is_a_static_method():
 
 
 def test_transformer_is_a_python_only_instance_method():
-    # Transformers modify + return a model, so they are instance methods kept off CLI/REST.
+    # Transformers modify + return a model, so they are instance methods kept off the CLI (REST
+    # returns the resulting model as UVL).
     descriptor = DiscoverMetamodels().available_operations()['generate_random_attribute']
     assert descriptor.kind == 'transformer'
     raw = inspect.getattr_static(FLAMAFeatureModel, 'generate_random_attribute')

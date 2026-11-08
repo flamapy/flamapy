@@ -58,7 +58,8 @@ def extract_commands(
         if name.startswith("_"):
             continue
         if getattr(method, "_facade_kind", "operation") != "operation":
-            continue  # producers/transformers return models; Python-API only for now
+            # producers/transformers return models: Python API and REST (as UVL), not the CLI
+            continue
         docstring: Optional[str] = method.__doc__
         signature = inspect.signature(method)
         # Exclude 'self' from parameters
@@ -83,14 +84,14 @@ def plan_command(args):  # type: ignore
     except FlamaException as error:
         print(f"No compatible backend: {error}")
         return None
-    chain = " -> ".join([fm.fm_model.get_extension()]
-                        + [destination for _, destination in chosen.transformation_chain])
+    data = chosen.to_dict(fm.fm_model.get_extension())
     print(f"operation:            {args.operation}")
-    print(f"chosen backend:       {chosen.plugin_name} (extension '{chosen.target_extension}')")
-    print(f"transformation chain: {chain}")
-    print(f"rationale:            {chosen.rationale}")
-    if chosen.alternatives:
-        print(f"alternatives:         {', '.join(chosen.alternatives)}")
+    print(f"chosen backend:       {data['plugin']} (extension '{data['backend']}')")
+    print(f"transformation chain: {' -> '.join(data['transformation_chain'])}")
+    print(f"estimated cost:       {data['estimated_cost_ms']} ms (heuristic)")
+    print(f"rationale:            {data['rationale']}")
+    if data['alternatives']:
+        print(f"alternatives:         {', '.join(data['alternatives'])}")
     return None
 
 
