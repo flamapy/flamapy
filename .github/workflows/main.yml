@@ -2,6 +2,21 @@ name: Python analysis
 
 on: [push, pull_request]
 
+env:
+  # The flamapy siblings the jobs install follow the branch being built. Commits always land on
+  # develop, and a .devN tag on develop publishes a dev release: those builds take the siblings
+  # from develop. The stable branch (main, or master in fw/fm/sat/bdd) only receives merges from
+  # develop and its tags publish the stable release: those builds take the siblings' stable
+  # branches, merged first in dependency order.
+  FLAMAPY_FW_REF: ${{ (contains(fromJSON('["main", "master"]'), github.base_ref || github.ref_name) || (startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, 'dev'))) && 'master' || 'develop' }}
+  FM_METAMODEL_REF: ${{ (contains(fromJSON('["main", "master"]'), github.base_ref || github.ref_name) || (startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, 'dev'))) && 'master' || 'develop' }}
+  PYSAT_METAMODEL_REF: ${{ (contains(fromJSON('["main", "master"]'), github.base_ref || github.ref_name) || (startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, 'dev'))) && 'master' || 'develop' }}
+  BDD_METAMODEL_REF: ${{ (contains(fromJSON('["main", "master"]'), github.base_ref || github.ref_name) || (startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, 'dev'))) && 'master' || 'develop' }}
+  Z3_METAMODEL_REF: ${{ (contains(fromJSON('["main", "master"]'), github.base_ref || github.ref_name) || (startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, 'dev'))) && 'main' || 'develop' }}
+  SDD_METAMODEL_REF: ${{ (contains(fromJSON('["main", "master"]'), github.base_ref || github.ref_name) || (startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, 'dev'))) && 'main' || 'develop' }}
+  DNNF_METAMODEL_REF: ${{ (contains(fromJSON('["main", "master"]'), github.base_ref || github.ref_name) || (startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, 'dev'))) && 'main' || 'develop' }}
+  SHARPSAT_METAMODEL_REF: ${{ (contains(fromJSON('["main", "master"]'), github.base_ref || github.ref_name) || (startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, 'dev'))) && 'main' || 'develop' }}
+
 jobs:
   ruff:
     runs-on: ubuntu-latest
@@ -15,11 +30,11 @@ jobs:
         run: |
               python -m pip install --upgrade pip
               pip install setuptools
-              pip install "git+https://github.com/flamapy/flamapy_fw@develop"
-              pip install "git+https://github.com/flamapy/fm_metamodel@develop"
-              pip install "git+https://github.com/flamapy/pysat_metamodel@develop"
-              pip install "git+https://github.com/flamapy/bdd_metamodel@develop"
-              pip install "git+https://github.com/flamapy/z3_metamodel@develop"
+              pip install "git+https://github.com/flamapy/flamapy_fw@${FLAMAPY_FW_REF}"
+              pip install "git+https://github.com/flamapy/fm_metamodel@${FM_METAMODEL_REF}"
+              pip install "git+https://github.com/flamapy/pysat_metamodel@${PYSAT_METAMODEL_REF}"
+              pip install "git+https://github.com/flamapy/bdd_metamodel@${BDD_METAMODEL_REF}"
+              pip install "git+https://github.com/flamapy/z3_metamodel@${Z3_METAMODEL_REF}"
               pip install .
       - name: Installing Ruff linter
         run: |
@@ -40,11 +55,11 @@ jobs:
           python -m pip install --upgrade pip
           pip install setuptools
           pip install mypy
-          pip install "git+https://github.com/flamapy/flamapy_fw@develop"
-          pip install "git+https://github.com/flamapy/fm_metamodel@develop"
-          pip install "git+https://github.com/flamapy/pysat_metamodel@develop"
-          pip install "git+https://github.com/flamapy/bdd_metamodel@develop"
-          pip install "git+https://github.com/flamapy/z3_metamodel@develop"
+          pip install "git+https://github.com/flamapy/flamapy_fw@${FLAMAPY_FW_REF}"
+          pip install "git+https://github.com/flamapy/fm_metamodel@${FM_METAMODEL_REF}"
+          pip install "git+https://github.com/flamapy/pysat_metamodel@${PYSAT_METAMODEL_REF}"
+          pip install "git+https://github.com/flamapy/bdd_metamodel@${BDD_METAMODEL_REF}"
+          pip install "git+https://github.com/flamapy/z3_metamodel@${Z3_METAMODEL_REF}"
           pip install .
       - name: Running static types with mypy
         run: |
@@ -61,14 +76,14 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install setuptools
-          pip install "git+https://github.com/flamapy/flamapy_fw@develop"
-          pip install "git+https://github.com/flamapy/fm_metamodel@develop"
-          pip install "git+https://github.com/flamapy/pysat_metamodel@develop"
-          pip install "git+https://github.com/flamapy/bdd_metamodel@develop"
-          pip install "git+https://github.com/flamapy/z3_metamodel@develop"
-          pip install "git+https://github.com/flamapy/sdd_metamodel@develop"
-          pip install "git+https://github.com/flamapy/dnnf_metamodel@develop"
-          pip install "git+https://github.com/flamapy/sharpsat_metamodel@develop"
+          pip install "git+https://github.com/flamapy/flamapy_fw@${FLAMAPY_FW_REF}"
+          pip install "git+https://github.com/flamapy/fm_metamodel@${FM_METAMODEL_REF}"
+          pip install "git+https://github.com/flamapy/pysat_metamodel@${PYSAT_METAMODEL_REF}"
+          pip install "git+https://github.com/flamapy/bdd_metamodel@${BDD_METAMODEL_REF}"
+          pip install "git+https://github.com/flamapy/z3_metamodel@${Z3_METAMODEL_REF}"
+          pip install "git+https://github.com/flamapy/sdd_metamodel@${SDD_METAMODEL_REF}"
+          pip install "git+https://github.com/flamapy/dnnf_metamodel@${DNNF_METAMODEL_REF}"
+          pip install "git+https://github.com/flamapy/sharpsat_metamodel@${SHARPSAT_METAMODEL_REF}"
           pip install .
           pip install pytest
       - name: Running test
