@@ -63,6 +63,24 @@ class Backend(str, Enum):
 # Facade backend name -> fm-to-backend transformation extension (the only non-identity mapping).
 _BACKEND_ALIAS = {"sat": "pysat"}
 
+# Operations that ran on a fixed backend in 2.8 and accept ``backend=`` since 2.9. In 2.x only a
+# per-call ``backend=`` changes them: the workspace default and FLAMAPY_BACKEND do not, so code
+# that set a default backend in 2.8 keeps the same results (the default would otherwise move
+# atomic sets from the tree to SAT, or send commonality to a backend without it). 3.0 applies
+# the defaults to them like to every other selectable operation.
+_SELECTABLE_SINCE_2_9 = frozenset({'atomic_sets', 'commonality'})
+
+_TRUE_VALUES = ('1', 'true', 'yes', 'on')
+
+
+def _env_flag(name: str) -> bool:
+    return os.environ.get(name, '').strip().lower() in _TRUE_VALUES
+
+
+def _raise_errors(setting: Optional[bool]) -> bool:
+    """The model's ``raise_errors`` when set, else the FLAMAPY_RAISE_ERRORS variable."""
+    return setting if setting is not None else _env_flag('FLAMAPY_RAISE_ERRORS')
+
 
 class FLAMAFeatureModel:
     """A feature model together with the analysis operations discovered from the installed plugins.
@@ -71,24 +89,30 @@ class FLAMAFeatureModel:
     them as normal methods, e.g. ``FLAMAFeatureModel(path).satisfiable()``.
     """
 
-    def __init__(self, model_path: str, backend: Optional[str] = None,
-                 allow_approximate: bool = False, raise_errors: bool = False) -> None:
+    def __init__(self, model_path: str, backend: Optional[str] = None, *,
+                 allow_approximate: Optional[bool] = None,
+                 raise_errors: Optional[bool] = None) -> None:
         """``model_path`` is the filesystem path to the model (UVL, FaMaXML or FeatureIDE).
 
         ``backend`` optionally sets a workspace-wide default backend ("sat", "bdd" or "z3",
         plus "sharpsat"/"sdd"/"dnnf" when the corresponding optional flamapy extra is
         installed) for every operation that supports more than one. When left as ``None``
         each operation keeps its historical default, so existing code behaves exactly as
-        before.
+        before. ``atomic_sets`` and ``commonality``, selectable only since 2.9, follow just a
+        per-call ``backend=`` in 2.x.
 
         ``allow_approximate`` lets the ``'auto'`` backend choose approximate implementations
         (e.g. sharpsat's ApproxMC counting, or the structural core features that ignore
-        cross-tree constraints); by default the planner only picks exact ones. Also settable
-        process-wide with ``FLAMAPY_ALLOW_APPROXIMATE=1`` and per call with
-        ``allow_approximate=True``.
+        cross-tree constraints); by default the planner only picks exact ones. It has no
+        effect on other backends. ``None`` falls back to ``FLAMAPY_ALLOW_APPROXIMATE=1``; a
+        per-call ``allow_approximate=`` overrides both.
 
         ``raise_errors`` opts into the 3.0 error contract today: a failing operation raises
-        its ``FlamaException`` instead of logging it and returning ``None``.
+        its ``FlamaException`` instead of logging it and returning ``None``. ``None`` falls
+        back to ``FLAMAPY_RAISE_ERRORS=1``, which also applies to the producers (e.g.
+        ``generate_random_feature_model``).
+
+        Both flags are keyword-only.
         """
         self.model_path = model_path
         self.discover_metamodel = DiscoverMetamodels()
@@ -138,9 +162,12 @@ class FLAMAFeatureModel:
         ``sat -> pysat`` differs) and cached per extension.
         """
         self._last_planner = None
+        defaults_apply = (descriptor.selectable_backend
+                          and descriptor.name not in _SELECTABLE_SINCE_2_9)
+        workspace_default = (self.backend or os.environ.get('FLAMAPY_BACKEND')
+                             if defaults_apply else None)
         if descriptor.selectable_backend:
-            resolved = (backend_arg or self.backend
-                        or os.environ.get('FLAMAPY_BACKEND') or descriptor.default_backend)
+            resolved = backend_arg or workspace_default or descriptor.default_backend
         else:
             resolved = descriptor.default_backend
         if resolved is None:
@@ -148,7 +175,7 @@ class FLAMAFeatureModel:
         name = resolved.value if isinstance(resolved, Backend) else str(resolved)
         if name == Backend.AUTO.value and descriptor.selectable_backend:
             return self._model_via_planner(descriptor, self._approximate_allowed(allow_approximate))
-        if backend_arg or self.backend or os.environ.get('FLAMAPY_BACKEND'):
+        if backend_arg or workspace_default:
             self._last_planner = 'explicit'
         extension = _BACKEND_ALIAS.get(name, name)
         return self._backend_model(extension)
@@ -170,10 +197,9 @@ class FLAMAFeatureModel:
         """Per-call flag > the model's setting > the FLAMAPY_ALLOW_APPROXIMATE variable."""
         if per_call is not None:
             return per_call
-        if self.allow_approximate:
-            return True
-        return os.environ.get('FLAMAPY_ALLOW_APPROXIMATE', '').strip().lower() in (
-            '1', 'true', 'yes', 'on')
+        if self.allow_approximate is not None:
+            return self.allow_approximate
+        return _env_flag('FLAMAPY_ALLOW_APPROXIMATE')
 
     def _plan_operation(self, operation_name: str, allow_approximate: bool = False) -> Plan:
         """Ask the query planner which backend should run ``operation_name`` on this model.
@@ -195,7 +221,7 @@ class FLAMAFeatureModel:
             allow_approximate=allow_approximate,
         )
 
-    def plan(self, operation: str, allow_approximate: Optional[bool] = None) -> Plan:
+    def plan(self, operation: str, *, allow_approximate: Optional[bool] = None) -> Plan:
         """Which backend ``backend='auto'`` would run ``operation`` on this model, and why.
 
         Returns the planner's :class:`~flamapy.core.planner.Plan` (plugin, target extension,
@@ -249,7 +275,8 @@ class FLAMAFeatureModel:
         """Resolve model + operation, wire inputs, execute, and marshal the result.
 
         Preserves the facade's historical contract: any :class:`FlamaException` is logged and the
-        call returns ``None``.
+        call returns ``None``, unless ``raise_errors`` (or ``FLAMAPY_RAISE_ERRORS=1``) asks for
+        the 3.0 contract, which raises it.
         """
         self.last_result = None
         try:
@@ -273,7 +300,7 @@ class FLAMAFeatureModel:
             self.last_result = envelope
             return envelope.value
         except FlamaException as exception:
-            if self.raise_errors:
+            if _raise_errors(self.raise_errors):
                 raise
             logger.error("Error: %s", exception)
             warnings.warn(
@@ -352,7 +379,9 @@ def _run_producer(descriptor: OperationDescriptor, call_kwargs: Dict[str, Any]) 
     """Run a 'producer' operation — one that *creates* a model instead of analysing one.
 
     Producers take no input model, so the operation is instantiated directly and executed with no
-    model. Same FlamaException -> None contract as :meth:`FLAMAFeatureModel._run_operation`.
+    model. Same FlamaException -> None contract as :meth:`FLAMAFeatureModel._run_operation`;
+    ``FLAMAPY_RAISE_ERRORS=1`` makes it raise instead (producers have no instance to carry
+    ``raise_errors``).
     """
     try:
         operation_class = next(
@@ -370,12 +399,19 @@ def _run_producer(descriptor: OperationDescriptor, call_kwargs: Dict[str, Any]) 
             result = descriptor.result_adapter(result)
         return result
     except FlamaException as exception:
+        if _raise_errors(None):
+            raise
         logger.error("Error: %s", exception)
         warnings.warn(
             "Returning None on operation errors is deprecated: flamapy 3.0 will raise "
             "the FlamaException instead. Catch FlamaException rather than checking for "
             "None.", DeprecationWarning, stacklevel=3)
         return None
+
+
+_SELECTABLE_NOTE = (
+    '\n\n``backend`` chooses the plugin that runs the operation (``"auto"`` lets the query '
+    'planner choose); ``allow_approximate`` only has an effect with ``backend="auto"``.')
 
 
 def _make_operation_method(descriptor: OperationDescriptor) -> Any:
@@ -414,7 +450,7 @@ def _make_operation_method(descriptor: OperationDescriptor) -> Any:
 
     method.__name__ = descriptor.name
     method.__qualname__ = f'{FLAMAFeatureModel.__name__}.{descriptor.name}'
-    method.__doc__ = descriptor.doc
+    method.__doc__ = descriptor.doc + (_SELECTABLE_NOTE if descriptor.selectable_backend else '')
     method.__signature__ = signature  # type: ignore[attr-defined]
     # Let the CLI/REST/tests tell analysis ops from producers/transformers without re-discovering.
     setattr(method, '_facade_kind', descriptor.kind)
