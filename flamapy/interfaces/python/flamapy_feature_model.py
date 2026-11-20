@@ -178,6 +178,20 @@ class FLAMAFeatureModel:
         if backend_arg or workspace_default:
             self._last_planner = 'explicit'
         extension = _BACKEND_ALIAS.get(name, name)
+        try:
+            manifest = self.discover_metamodel.plugins.get_plugin_by_extension(
+                extension).manifest
+        except PluginNotFound:
+            manifest = None
+        if manifest is not None and not manifest.supports(self._language_level()):
+            warnings.warn(
+                f"Backend '{manifest.name}' supports {manifest.supported_level}, but this "
+                f"model is {self._language_level()}: constraints beyond that level are "
+                f"ignored, so the result is not exact for this model. Use backend='auto' "
+                f"or 'z3' for an exact answer.",
+                UserWarning,
+                stacklevel=4,
+            )
         return self._backend_model(extension)
 
     def _backend_model(self, extension: str) -> VariabilityModel:
