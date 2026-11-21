@@ -82,6 +82,51 @@ def _raise_errors(setting: Optional[bool]) -> bool:
     return setting if setting is not None else _env_flag('FLAMAPY_RAISE_ERRORS')
 
 
+def _caller_stacklevel() -> int:
+    """The ``warnings.warn`` stacklevel, for its caller, of the first frame outside this module:
+    the user's call, whichever facade entry point (operation method, iter_configurations) it
+    went through."""
+    frame = inspect.currentframe()
+    frame = frame.f_back if frame is not None else None  # the function calling warnings.warn
+    level = 1
+    while frame is not None and frame.f_globals.get('__name__') == __name__:
+        frame = frame.f_back
+        level += 1
+    return level
+
+
+@dataclasses.dataclass(frozen=True)
+class _Route:
+    """How one call's backend was chosen. It travels with the call (never stored on the
+    facade), so concurrent ``run_async`` jobs on one facade cannot see each other's."""
+    # The backend name as requested or defaulted; None for an fm-level operation.
+    name: Optional[str] = None
+    # True when the choice is the query planner's (backend='auto').
+    auto: bool = False
+    # None (historical default), 'explicit', or 'auto: <planner rationale>'.
+    planner: Optional[str] = None
+    # Set when the backend ignores part of the model (its manifest does not support the
+    # model's language level): the warning to emit; the result is then not exact.
+    level_gap: Optional[str] = None
+
+
+def _stamp(envelope: OperationResult[Any], route: _Route,
+           model: VariabilityModel) -> OperationResult[Any]:
+    """Record on a result envelope how its backend was chosen and whether it is exact."""
+    if route.planner is not None:
+        envelope = dataclasses.replace(envelope, planner=route.planner)
+    if route.level_gap is not None:
+        envelope = dataclasses.replace(envelope, exact=False)
+    if getattr(model, '_flamapy_cache_hit', False):
+        envelope = dataclasses.replace(envelope, cache_hit=True)
+    return envelope
+
+
+def _warn_level_gap(route: _Route) -> None:
+    if route.level_gap is not None:
+        warnings.warn(route.level_gap, UserWarning, stacklevel=_caller_stacklevel())
+
+
 class FLAMAFeatureModel:
     """A feature model together with the analysis operations discovered from the installed plugins.
 
@@ -125,9 +170,6 @@ class FLAMAFeatureModel:
         # wall time, model hash). Purely informational in 2.9; methods still return bare
         # values. In 3.0 the envelope becomes the return type.
         self.last_result: Optional[OperationResult] = None
-        # How the last operation's backend was chosen: None (historical default),
-        # 'explicit', or 'auto: <planner rationale>'.
-        self._last_planner: Optional[str] = None
         self._model_language_level: Optional[LanguageLevel] = None
 
     def _read(self, model_path: str) -> FeatureModel:
@@ -147,21 +189,15 @@ class FLAMAFeatureModel:
             return Configuration(configuration)
         return self.discover_metamodel.use_transformation_t2m(configuration, "configuration")
 
-    def _model_for(
-        self, descriptor: OperationDescriptor, backend_arg: Optional[str],
-        allow_approximate: Optional[bool] = None,
-    ) -> VariabilityModel:
-        """Resolve the operation's target model, lazily transforming (and caching) fm->backend.
+    def _route(self, descriptor: OperationDescriptor, backend_arg: Optional[str]) -> _Route:
+        """Decide which backend a call runs on, without building anything.
 
         The backend is the per-call one > workspace default > the ``FLAMAPY_BACKEND``
         environment variable > the operation's default (for backend-selectable ops), or
         simply the fixed default. The value ``'auto'`` (opt-in) hands the choice to the
-        query planner. When the backend resolves to ``None`` (an fm-level op, or a
-        selectable op with no backend requested) the operation runs on the feature model
-        directly. Otherwise the name is mapped to a transformation extension (only
-        ``sat -> pysat`` differs) and cached per extension.
+        query planner; ``None`` (an fm-level op, or a selectable op with no backend
+        requested) runs the operation on the feature model directly.
         """
-        self._last_planner = None
         defaults_apply = (descriptor.selectable_backend
                           and descriptor.name not in _SELECTABLE_SINCE_2_9)
         workspace_default = (self.backend or os.environ.get('FLAMAPY_BACKEND')
@@ -171,14 +207,52 @@ class FLAMAFeatureModel:
         else:
             resolved = descriptor.default_backend
         if resolved is None:
-            return self.fm_model
+            return _Route()
         name = resolved.value if isinstance(resolved, Backend) else str(resolved)
         if name == Backend.AUTO.value and descriptor.selectable_backend:
-            return self._model_via_planner(descriptor, self._approximate_allowed(allow_approximate))
-        if backend_arg or workspace_default:
-            self._last_planner = 'explicit'
+            return _Route(name=name, auto=True)
+        return _Route(
+            name=name,
+            planner='explicit' if backend_arg or workspace_default else None,
+            level_gap=self._level_gap(name, descriptor.selectable_backend))
+
+    def _level_gap(self, name: str, selectable: bool) -> Optional[str]:
+        """The warning for a backend whose manifest does not support the model's language
+        level (e.g. sat/bdd ignore arithmetic constraints), or None when it does.
+
+        In 2.9 this only warns, and the result is marked inexact; flamapy 3.0 raises
+        NoCompatibleBackendError instead, like backend='auto' does when no installed plugin
+        supports the model.
+        """
         extension = _BACKEND_ALIAS.get(name, name)
-        return self._backend_model(extension)
+        try:
+            manifest = self.discover_metamodel.plugins.get_plugin_by_extension(extension).manifest
+        except PluginNotFound:
+            return None  # an unknown backend fails later, when its model is built
+        model_level = self._language_level()
+        if manifest.supports(model_level):
+            return None
+        advice = " Use backend='auto' or backend='z3'." if selectable else ''
+        return (f"The '{name}' backend supports ({manifest.supported_level}), but this model "
+                f"is ({model_level}): constraints beyond the backend's level are ignored, so "
+                f"the result is not exact.{advice}")
+
+    def _model_for(
+        self, descriptor: OperationDescriptor, route: _Route,
+        allow_approximate: Optional[bool] = None,
+    ) -> tuple[VariabilityModel, _Route]:
+        """Build the route's target model, lazily transforming (and caching) fm->backend.
+
+        A backend name is mapped to a transformation extension (only ``sat -> pysat``
+        differs) and cached per extension. Returns the route too: for ``'auto'`` it now
+        carries the planner's rationale.
+        """
+        if route.name is None:
+            return self.fm_model, route
+        if route.auto:
+            return self._model_via_planner(
+                descriptor, route, self._approximate_allowed(allow_approximate))
+        return self._backend_model(_BACKEND_ALIAS.get(route.name, route.name)), route
 
     def _backend_model(self, extension: str) -> VariabilityModel:
         if extension == self.fm_model.get_extension():
@@ -237,24 +311,32 @@ class FLAMAFeatureModel:
             raise FlamaException(f"'{operation}' is not a backend-selectable facade operation.")
         return self._plan_operation(operation, self._approximate_allowed(allow_approximate))
 
-    def _model_via_planner(self, descriptor: OperationDescriptor,
-                           allow_approximate: bool = False) -> VariabilityModel:
+    def _model_via_planner(self, descriptor: OperationDescriptor, route: _Route,
+                           allow_approximate: bool = False) -> tuple[VariabilityModel, _Route]:
         chosen = self._plan_operation(descriptor.name, allow_approximate)
-        self._last_planner = f'auto: {chosen.rationale}'
+        route = dataclasses.replace(route, planner=f'auto: {chosen.rationale}')
         model = self.fm_model
         for _, destination in chosen.transformation_chain:
             if destination not in self._backend_models:
                 self._backend_models[destination] = (
                     self.discover_metamodel.use_transformation_m2m(model, destination))
             model = self._backend_models[destination]
-        return model
+        return model, route
 
     def _prepare_operation(
         self, descriptor: OperationDescriptor, backend_arg: Optional[str],
         call_kwargs: Dict[str, Any], allow_approximate: Optional[bool] = None,
-    ) -> tuple[Any, VariabilityModel]:
-        """Resolve the target model and a fully input-wired operation instance."""
-        model = self._model_for(descriptor, backend_arg, allow_approximate)
+        route: Optional[_Route] = None,
+    ) -> tuple[Any, VariabilityModel, _Route]:
+        """Resolve the target model and a fully input-wired operation instance.
+
+        ``route`` is passed by a caller that already decided it (and warned) on the user's
+        thread; otherwise it is decided, and its warning emitted, here.
+        """
+        if route is None:
+            route = self._route(descriptor, backend_arg)
+            _warn_level_gap(route)
+        model, route = self._model_for(descriptor, route, allow_approximate)
         operation = self.discover_metamodel.get_operation(model, descriptor.operation)
         if descriptor.input_adapter is not None:
             descriptor.input_adapter(operation, self, call_kwargs)
@@ -267,7 +349,7 @@ class FLAMAFeatureModel:
                     value = self._as_configuration(value)
                 if input_spec.setter is not None:
                     getattr(operation, input_spec.setter)(value)
-        return operation, model
+        return operation, model, route
 
     def _run_operation(
         self, descriptor: OperationDescriptor, call_kwargs: Dict[str, Any]
@@ -282,7 +364,7 @@ class FLAMAFeatureModel:
         try:
             backend_arg = call_kwargs.pop('backend', None)
             allow_approximate = call_kwargs.pop('allow_approximate', None)
-            operation, model = self._prepare_operation(
+            operation, model, route = self._prepare_operation(
                 descriptor, backend_arg, call_kwargs, allow_approximate)
             # The hash is always the source feature model's (memoized there), whichever
             # backend model the operation actually runs on.
@@ -293,10 +375,7 @@ class FLAMAFeatureModel:
             if descriptor.result_adapter is not None:
                 envelope = dataclasses.replace(
                     envelope, value=descriptor.result_adapter(envelope.value))
-            if self._last_planner is not None:
-                envelope = dataclasses.replace(envelope, planner=self._last_planner)
-            if getattr(model, '_flamapy_cache_hit', False):
-                envelope = dataclasses.replace(envelope, cache_hit=True)
+            envelope = _stamp(envelope, route, model)
             self.last_result = envelope
             return envelope.value
         except FlamaException as exception:
@@ -324,10 +403,12 @@ class FLAMAFeatureModel:
         expiry (after requesting cooperative cancellation) — unlike the 2.x synchronous
         methods, errors are **raised**, not swallowed into ``None``.
 
-        Everything after resolving the operation name runs inside the job — including the
+        Everything after choosing the backend runs inside the job — including the
         fm->backend transformation (e.g. BDD compilation, often the expensive step on large
         models) — so the timeout covers it and preparation errors (unknown backend,
-        invalid inputs) are raised by ``job.result()``.
+        invalid inputs) are raised by ``job.result()``. The envelope (``job.envelope()``)
+        carries the same provenance as the synchronous ``last_result``; the warning about a
+        backend that ignores part of the model is emitted here, by the call itself.
         """
         method = getattr(type(self), operation, None)
         descriptor = getattr(method, '_facade_descriptor', None)
@@ -336,10 +417,14 @@ class FLAMAFeatureModel:
         call_kwargs = dict(kwargs)
         backend_arg = call_kwargs.pop('backend', None)
         allow_approximate = call_kwargs.pop('allow_approximate', None)
+        # Decided (and warned about) on the caller's thread: the route belongs to this job
+        # alone, and a warning raised from the worker would point into the thread pool.
+        route = self._route(descriptor, backend_arg)
+        _warn_level_gap(route)
 
         def task(interrupt_event: threading.Event) -> OperationResult[Any]:
-            prepared, model = self._prepare_operation(
-                descriptor, backend_arg, call_kwargs, allow_approximate)
+            prepared, model, job_route = self._prepare_operation(
+                descriptor, backend_arg, call_kwargs, allow_approximate, route)
             if interrupt_event.is_set():
                 # The deadline expired (or cancel() was called) during preparation: the
                 # caller has already given up, so don't start the operation at all.
@@ -347,10 +432,11 @@ class FLAMAFeatureModel:
                     f"'{descriptor.name}' was cancelled before execution started.")
             if isinstance(prepared, Interruptible):
                 prepared.set_interrupt_event(interrupt_event)
-            return run_and_wrap(
+            envelope = run_and_wrap(
                 prepared, model,
                 operation_name=descriptor.name, plugin=self._plugin_name_for(model),
                 model_hash=self.fm_model.canonical_hash())
+            return _stamp(envelope, job_route, model)
 
         return default_engine().submit_call(task, result_adapter=descriptor.result_adapter)
 
@@ -363,7 +449,7 @@ class FLAMAFeatureModel:
         :meth:`run_async` (raises, never ``None``).
         """
         descriptor = type(self).configurations._facade_descriptor  # type: ignore[attr-defined]
-        operation, model = self._prepare_operation(descriptor, backend or 'sat', {})
+        operation, model, _ = self._prepare_operation(descriptor, backend or 'sat', {})
         if isinstance(operation, StreamingOperation):
             return operation.iter_execute(model)
         operation.execute(model)

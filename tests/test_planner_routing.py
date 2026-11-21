@@ -143,3 +143,59 @@ def test_raise_errors_opts_into_the_3_0_contract():
     with pytest.raises(FlamaException):
         strict.satisfiable(backend='sharpsat_is_not_a_backend')
     assert strict.satisfiable() is True
+
+
+# --- explicit backends below the model's language level (issue #3) -----------------------------
+
+# B is mandatory with Fun = 8, so the arithmetic constraint makes the model unsatisfiable; the
+# SAT/BDD encodings drop it.
+ARITHMETIC_UNSATISFIABLE_MODEL = (
+    'features\n'
+    '    A\n'
+    '        mandatory\n'
+    '            B {Fun 8}\n'
+    'constraints\n'
+    '    B.Fun < 7\n'
+)
+
+
+@pytest.fixture
+def arithmetic_model(tmp_path):
+    path = tmp_path / 'arithmetic_unsatisfiable.uvl'
+    path.write_text(ARITHMETIC_UNSATISFIABLE_MODEL)
+    return str(path)
+
+
+@pytest.mark.parametrize('backend', ['sat', 'bdd', None])
+def test_backend_below_the_model_level_warns_and_is_not_exact(arithmetic_model, backend):
+    fm = FLAMAFeatureModel(arithmetic_model)
+    with pytest.warns(UserWarning, match="constraints beyond the backend's level are ignored"):
+        fm.satisfiable(backend=backend)
+    assert fm.last_result.exact is False
+
+
+@pytest.mark.parametrize('backend', ['z3', 'auto'])
+def test_backend_supporting_the_model_level_does_not_warn(arithmetic_model, backend, recwarn):
+    fm = FLAMAFeatureModel(arithmetic_model)
+    assert fm.satisfiable(backend=backend) is False
+    assert fm.last_result.exact is True
+    assert not [w for w in recwarn if issubclass(w.category, UserWarning)]
+
+
+@pytest.mark.parametrize('backend', ['sat', 'bdd'])
+def test_boolean_model_does_not_warn(backend, recwarn):
+    fm = FLAMAFeatureModel(VALID_MODEL)
+    assert fm.satisfiable(backend=backend) is True
+    assert fm.last_result.exact is True
+    assert not [w for w in recwarn if issubclass(w.category, UserWarning)]
+
+
+def test_inexact_flag_does_not_leak_into_the_next_call(arithmetic_model):
+    fm = FLAMAFeatureModel(arithmetic_model)
+    with pytest.warns(UserWarning):
+        fm.satisfiable(backend='sat')
+    assert fm.last_result.exact is False
+    assert fm.satisfiable(backend='z3') is False
+    assert fm.last_result.exact is True
+    assert fm.leaf_features() == ['B']  # fm-level: never checked against a backend level
+    assert fm.last_result.exact is True

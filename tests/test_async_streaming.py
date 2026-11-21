@@ -1,6 +1,7 @@
 """The additive async + streaming facade API (v2.9 / Track A phase 6)."""
 import subprocess
 import time
+import warnings
 
 import pytest
 
@@ -96,3 +97,65 @@ def test_cli_timeout_flag_passes_fast_operations():
         capture_output=True, text=True, check=False)
     assert completed.returncode == 0
     assert completed.stdout.strip() == 'True'
+
+
+# --- flamapy#3: a backend that ignores part of the model, through run_async --------------------
+
+_ARITHMETIC_UNSAT = (
+    "features\n"
+    "    A\n"
+    "        mandatory\n"
+    "            B {Fun 8}\n"
+    "constraints\n"
+    "    B.Fun < 7\n"
+)
+
+
+def _arithmetic_model(tmp_path):
+    path = tmp_path / "arithmetic.uvl"
+    path.write_text(_ARITHMETIC_UNSAT)
+    return FLAMAFeatureModel(str(path))
+
+
+@pytest.mark.parametrize("backend", ['sat', 'bdd'])
+def test_run_async_marks_a_result_beyond_the_backend_level_inexact(tmp_path, backend):
+    fm = _arithmetic_model(tmp_path)
+    # The warning comes from the run_async call itself, on the caller's thread and line.
+    with pytest.warns(UserWarning, match='the result is not exact') as record:
+        job = fm.run_async('satisfiable', backend=backend)
+    assert record[0].filename == __file__
+    envelope = job.envelope(timeout=30)
+    assert envelope.exact is False and envelope.planner == 'explicit'
+
+
+def test_run_async_envelope_matches_the_sync_provenance(tmp_path):
+    fm = _arithmetic_model(tmp_path)
+    for backend in ('z3', 'auto'):
+        with warnings.catch_warnings():
+            warnings.simplefilter('error', UserWarning)
+            job = fm.run_async('satisfiable', backend=backend)
+            assert job.result(timeout=30) is False
+        fm.satisfiable(backend=backend)
+        envelope = job.envelope()
+        assert envelope.exact is True
+        assert envelope.planner == fm.last_result.planner
+        assert envelope.backend == fm.last_result.backend
+
+
+def test_concurrent_jobs_do_not_share_their_provenance(tmp_path):
+    # Many jobs on ONE facade, alternating a backend that ignores the arithmetic constraint
+    # (inexact) with one that does not: each envelope must carry its own verdict.
+    fm = _arithmetic_model(tmp_path)
+    backends = ['sat', 'z3', 'bdd', 'auto'] * 6
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore', UserWarning)
+        jobs = [(backend, fm.run_async('satisfiable', backend=backend)) for backend in backends]
+    for backend, job in jobs:
+        envelope = job.envelope(timeout=60)
+        inexact = backend in ('sat', 'bdd')
+        assert envelope.exact is (not inexact), backend
+        assert envelope.value is inexact, backend  # the dropped constraint makes it "sat"
+        if backend == 'auto':
+            assert envelope.planner.startswith('auto: ')
+        else:
+            assert envelope.planner == 'explicit'
