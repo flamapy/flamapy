@@ -232,10 +232,19 @@ class FLAMAFeatureModel:
         model_level = self._language_level()
         if manifest.supports(model_level):
             return None
-        advice = " Use backend='auto' or backend='z3'." if selectable else ''
+        advice = ''
+        if selectable and self._z3_supports(model_level) and name != Backend.Z3.value:
+            advice = " Use backend='auto' or backend='z3'."
         return (f"The '{name}' backend supports ({manifest.supported_level}), but this model "
                 f"is ({model_level}): constraints beyond the backend's level are ignored, so "
                 f"the result is not exact.{advice}")
+
+    def _z3_supports(self, model_level: LanguageLevel) -> bool:
+        try:
+            plugin = self.discover_metamodel.plugins.get_plugin_by_extension(Backend.Z3.value)
+        except PluginNotFound:
+            return False
+        return plugin.manifest.supports(model_level)
 
     def _model_for(
         self, descriptor: OperationDescriptor, route: _Route,

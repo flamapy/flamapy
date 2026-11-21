@@ -199,3 +199,15 @@ def test_inexact_flag_does_not_leak_into_the_next_call(arithmetic_model):
     assert fm.last_result.exact is True
     assert fm.leaf_features() == ['B']  # fm-level: never checked against a backend level
     assert fm.last_result.exact is True
+
+
+def test_level_warning_only_recommends_a_backend_that_supports_the_model(tmp_path):
+    # Feature cardinalities are beyond every backend, z3 included: no backend to recommend.
+    path = tmp_path / "feature_cardinality.uvl"
+    path.write_text("features\n    Root\n        optional\n            A cardinality [1..3]\n")
+    fm = FLAMAFeatureModel(str(path))
+    for backend in ('sat', 'z3'):
+        with pytest.warns(UserWarning, match='the result is not exact') as record:
+            fm.satisfiable(backend=backend)
+        assert 'Use backend=' not in str(record[0].message)
+        assert fm.last_result.exact is False
