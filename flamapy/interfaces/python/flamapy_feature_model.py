@@ -32,6 +32,7 @@ from flamapy.core.operations import (
 from flamapy.core.planner import Plan, plan as plan_backend
 from flamapy.metamodels.configuration_metamodel.models import Configuration
 from flamapy.metamodels.fm_metamodel.models import FeatureModel
+from flamapy.metamodels.fm_metamodel.transformations import FlatFM
 from flamapy.metamodels.fm_metamodel.operations.fm_language_level import (
     calculate_language_level,
 )
@@ -124,11 +125,11 @@ class _Route:
 
 
 def _stamp(envelope: OperationResult[Any], route: _Route,
-           model: VariabilityModel) -> OperationResult[Any]:
+           model: VariabilityModel, ambiguous: bool = False) -> OperationResult[Any]:
     """Record on a result envelope how its backend was chosen and whether it is exact."""
     if route.planner is not None:
         envelope = dataclasses.replace(envelope, planner=route.planner)
-    if route.level_gap is not None:
+    if route.level_gap is not None or ambiguous:
         envelope = dataclasses.replace(envelope, exact=False)
     if getattr(model, '_flamapy_cache_hit', False):
         envelope = dataclasses.replace(envelope, cache_hit=True)
@@ -175,6 +176,15 @@ class FLAMAFeatureModel:
         self.model_path = model_path
         self.discover_metamodel = DiscoverMetamodels()
         self.fm_model = self._read(model_path)
+        # The backends identify a feature by its name, so two features with one name are
+        # analysed as a single feature: no result on such a model can be trusted.
+        self._ambiguous = bool(repeated := self._repeated_names())
+        if repeated:
+            warnings.warn(
+                f"The model has {len(repeated)} feature name(s) used by more than one "
+                f"feature ({', '.join(repeated)}). Features are identified by name, so the "
+                "analysis results on this model cannot be guaranteed.",
+                UserWarning, stacklevel=2)
         self.backend = Backend(backend) if backend is not None else None
         self.allow_approximate = allow_approximate
         self.raise_errors = raise_errors
@@ -186,7 +196,16 @@ class FLAMAFeatureModel:
         self._model_language_level: Optional[LanguageLevel] = None
 
     def _read(self, model_path: str) -> FeatureModel:
-        return self.discover_metamodel.use_transformation_t2m(model_path, "fm")
+        model = self.discover_metamodel.use_transformation_t2m(model_path, "fm")
+        if getattr(model, 'imports', None):
+            # The analyses work on one tree: without this the imported models would count
+            # as leaf features, and their features and constraints would be ignored.
+            model = FlatFM(model).transform()
+        return model
+
+    def _repeated_names(self) -> list[str]:
+        names = [feature.name for feature in self.fm_model.get_features()]
+        return sorted({name for name in names if names.count(name) > 1})
 
     def _as_configuration(
         self, configuration: Union[str, Dict[str, Any], Configuration]
@@ -400,7 +419,7 @@ class FLAMAFeatureModel:
             if descriptor.result_adapter is not None:
                 envelope = dataclasses.replace(
                     envelope, value=descriptor.result_adapter(envelope.value))
-            envelope = _stamp(envelope, route, model)
+            envelope = _stamp(envelope, route, model, self._ambiguous)
             self.last_result = envelope
             return envelope.value
         except FlamaException as exception:
@@ -465,7 +484,7 @@ class FLAMAFeatureModel:
                     prepared, model,
                     operation_name=descriptor.name, plugin=self._plugin_name_for(model),
                     model_hash=self.fm_model.canonical_hash())
-            return _stamp(envelope, job_route, model)
+            return _stamp(envelope, job_route, model, self._ambiguous)
 
         return default_engine().submit_call(task, result_adapter=descriptor.result_adapter)
 
