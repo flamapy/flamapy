@@ -60,10 +60,10 @@ def test_a_model_without_imports_or_repeated_names_does_not_warn(tmp_path):
     'features\n    Mix\n        optional\n            Three\n                mandatory\n'
     '                    Sp\n            Two\n                mandatory\n                    Sp\n',
 ])
-def test_repeated_feature_names_warn_and_mark_results_inexact(tmp_path, main):
+def test_repeated_feature_names_warn(tmp_path, main):
     with pytest.warns(UserWarning, match='cannot be guaranteed') as record:
         fm = _model(tmp_path, main)
     assert record[0].filename == __file__
+    # The backend does not approximate anything: the warning is the only signal.
     fm.satisfiable(backend='sat')
-    assert fm.last_result.exact is False
-    assert fm.run_async('satisfiable', backend='sat').envelope(timeout=30).exact is False
+    assert fm.last_result.exact is True

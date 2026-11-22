@@ -125,11 +125,11 @@ class _Route:
 
 
 def _stamp(envelope: OperationResult[Any], route: _Route,
-           model: VariabilityModel, ambiguous: bool = False) -> OperationResult[Any]:
+           model: VariabilityModel) -> OperationResult[Any]:
     """Record on a result envelope how its backend was chosen and whether it is exact."""
     if route.planner is not None:
         envelope = dataclasses.replace(envelope, planner=route.planner)
-    if route.level_gap is not None or ambiguous:
+    if route.level_gap is not None:
         envelope = dataclasses.replace(envelope, exact=False)
     if getattr(model, '_flamapy_cache_hit', False):
         envelope = dataclasses.replace(envelope, cache_hit=True)
@@ -177,8 +177,9 @@ class FLAMAFeatureModel:
         self.discover_metamodel = DiscoverMetamodels()
         self.fm_model = self._read(model_path)
         # The backends identify a feature by its name, so two features with one name are
-        # analysed as a single feature: no result on such a model can be trusted.
-        self._ambiguous = bool(repeated := self._repeated_names())
+        # analysed as a single feature: no result on such a model can be trusted. The result
+        # envelopes still say exact=True, which only tells whether the backend approximates.
+        repeated = self._repeated_names()
         if repeated:
             warnings.warn(
                 f"The model has {len(repeated)} feature name(s) used by more than one "
@@ -419,7 +420,7 @@ class FLAMAFeatureModel:
             if descriptor.result_adapter is not None:
                 envelope = dataclasses.replace(
                     envelope, value=descriptor.result_adapter(envelope.value))
-            envelope = _stamp(envelope, route, model, self._ambiguous)
+            envelope = _stamp(envelope, route, model)
             self.last_result = envelope
             return envelope.value
         except FlamaException as exception:
@@ -484,7 +485,7 @@ class FLAMAFeatureModel:
                     prepared, model,
                     operation_name=descriptor.name, plugin=self._plugin_name_for(model),
                     model_hash=self.fm_model.canonical_hash())
-            return _stamp(envelope, job_route, model, self._ambiguous)
+            return _stamp(envelope, job_route, model)
 
         return default_engine().submit_call(task, result_adapter=descriptor.result_adapter)
 
