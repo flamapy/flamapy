@@ -63,6 +63,19 @@ class Backend(str, Enum):
 # Facade backend name -> fm-to-backend transformation extension (the only non-identity mapping).
 _BACKEND_ALIAS = {"sat": "pysat"}
 
+# The solver libraries are not thread-safe: Z3 shares one global context, and dd parses
+# every BDD expression with one module-level parser, so two threads building or querying the
+# same kind of backend model corrupt each other (wrong results, or a crash of the whole
+# interpreter). One process-wide lock per backend serialises that work; jobs on different
+# backends still run concurrently.
+_BACKEND_LOCKS: Dict[str, threading.RLock] = {}
+_BACKEND_LOCKS_GUARD = threading.Lock()
+
+
+def _backend_lock(extension: str) -> threading.RLock:
+    with _BACKEND_LOCKS_GUARD:
+        return _BACKEND_LOCKS.setdefault(extension, threading.RLock())
+
 # Operations that ran on a fixed backend in 2.6 and accept ``backend=`` since 2.9. In 2.x only a
 # per-call ``backend=`` changes them: the workspace default and FLAMAPY_BACKEND do not, so code
 # that set a default backend in 2.6 keeps the same results (the default would otherwise move
@@ -266,10 +279,15 @@ class FLAMAFeatureModel:
     def _backend_model(self, extension: str) -> VariabilityModel:
         if extension == self.fm_model.get_extension():
             return self.fm_model
-        if extension not in self._backend_models:
-            self._backend_models[extension] = self.discover_metamodel.use_transformation_m2m(
-                self.fm_model, extension)
-        return self._backend_models[extension]
+        return self._transformed(self.fm_model, extension)
+
+    def _transformed(self, source: VariabilityModel, extension: str) -> VariabilityModel:
+        """The cached ``extension`` model, built from ``source`` once even under concurrency."""
+        with _backend_lock(extension):
+            if extension not in self._backend_models:
+                self._backend_models[extension] = (
+                    self.discover_metamodel.use_transformation_m2m(source, extension))
+            return self._backend_models[extension]
 
     def _language_level(self) -> LanguageLevel:
         if self._model_language_level is None:
@@ -326,10 +344,7 @@ class FLAMAFeatureModel:
         route = dataclasses.replace(route, planner=f'auto: {chosen.rationale}')
         model = self.fm_model
         for _, destination in chosen.transformation_chain:
-            if destination not in self._backend_models:
-                self._backend_models[destination] = (
-                    self.discover_metamodel.use_transformation_m2m(model, destination))
-            model = self._backend_models[destination]
+            model = self._transformed(model, destination)
         return model, route
 
     def _prepare_operation(
@@ -377,10 +392,11 @@ class FLAMAFeatureModel:
                 descriptor, backend_arg, call_kwargs, allow_approximate)
             # The hash is always the source feature model's (memoized there), whichever
             # backend model the operation actually runs on.
-            envelope = run_and_wrap(
-                operation, model,
-                operation_name=descriptor.name, plugin=self._plugin_name_for(model),
-                model_hash=self.fm_model.canonical_hash())
+            with _backend_lock(model.get_extension()):
+                envelope = run_and_wrap(
+                    operation, model,
+                    operation_name=descriptor.name, plugin=self._plugin_name_for(model),
+                    model_hash=self.fm_model.canonical_hash())
             if descriptor.result_adapter is not None:
                 envelope = dataclasses.replace(
                     envelope, value=descriptor.result_adapter(envelope.value))
@@ -441,10 +457,14 @@ class FLAMAFeatureModel:
                     f"'{descriptor.name}' was cancelled before execution started.")
             if isinstance(prepared, Interruptible):
                 prepared.set_interrupt_event(interrupt_event)
-            envelope = run_and_wrap(
-                prepared, model,
-                operation_name=descriptor.name, plugin=self._plugin_name_for(model),
-                model_hash=self.fm_model.canonical_hash())
+            with _backend_lock(model.get_extension()):
+                if interrupt_event.is_set():  # gave up while waiting for the backend
+                    raise OperationTimeout(
+                        f"'{descriptor.name}' was cancelled before execution started.")
+                envelope = run_and_wrap(
+                    prepared, model,
+                    operation_name=descriptor.name, plugin=self._plugin_name_for(model),
+                    model_hash=self.fm_model.canonical_hash())
             return _stamp(envelope, job_route, model)
 
         return default_engine().submit_call(task, result_adapter=descriptor.result_adapter)
@@ -461,7 +481,8 @@ class FLAMAFeatureModel:
         operation, model, _ = self._prepare_operation(descriptor, backend or 'sat', {})
         if isinstance(operation, StreamingOperation):
             return operation.iter_execute(model)
-        operation.execute(model)
+        with _backend_lock(model.get_extension()):
+            operation.execute(model)
         return iter(operation.get_result())
 
 
