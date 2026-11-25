@@ -1,17 +1,16 @@
 # Fuzzes flamapy with UVL models that Fandango makes from Fanbase specs (github.com/fandango-fuzzer/fandango-action).
 # Each model is valid UVL, so one that flamapy rejects, or that its backends disagree on, is a finding.
 # The log shows counts only. What was found is in the Security tab, under Code scanning, where people with
-# write access to the repository can read it.
+# write access to the repository can read it. That page shows the default branch at first: the alerts of a
+# run on develop are under the filter branch:develop, and the link in the run's summary opens them.
 name: Fuzz
 
 on:
-  schedule:
-    - cron: "17 3 * * 1"   # Mondays, 03:17 UTC
-  workflow_dispatch:
   push:
-    paths:
-      - ".fandango/**"
-      - ".github/workflows/fuzz.yml"
+    branches: [develop]    # what was just changed, with models that are new each time
+  schedule:
+    - cron: "17 3 * * 1"   # Mondays, 03:17 UTC; a schedule only fires from the default branch
+  workflow_dispatch:
 
 permissions:
   contents: read
