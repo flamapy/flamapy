@@ -1,0 +1,3 @@
+title: flamapy (Z3 backend)
+formats: [uvl]
+run: ["{python}", "{dir}/harness.py", "{file}"]

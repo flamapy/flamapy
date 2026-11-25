@@ -1,0 +1,3 @@
+title: flamapy (BDD backend)
+formats: [uvl]
+run: ["{python}", "{dir}/harness.py", "{file}"]

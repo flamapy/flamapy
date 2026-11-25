@@ -1,0 +1,3 @@
+title: flamapy (SAT backend)
+formats: [uvl]
+run: ["{python}", "{dir}/harness.py", "{file}"]

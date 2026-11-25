@@ -1,0 +1,48 @@
+# Fuzzes flamapy with UVL models that Fandango makes from Fanbase specs (github.com/fandango-fuzzer/fandango-action).
+# Each model is valid UVL, so one that flamapy rejects, or that its backends disagree on, is a finding.
+# The log shows counts only. What was found is in the Security tab, under Code scanning, where people with
+# write access to the repository can read it. That page shows the default branch at first: the alerts of a
+# run on develop are under the filter branch:develop, and the link in the run's summary opens them.
+name: Fuzz
+
+on:
+  push:
+    branches: [develop]    # what was just changed, with models that are new each time
+  schedule:
+    - cron: "17 3 * * 1"   # Mondays, 03:17 UTC; a schedule only fires from the default branch
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write   # to report what is found as code scanning alerts
+
+concurrency:
+  group: fuzz-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The schedule fires from the default branch, but what is being worked on is develop
+          ref: ${{ github.event_name == 'schedule' && 'develop' || github.ref }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install flamapy and its plugins from develop
+        run: |
+          for sibling in flamapy_fw fm_metamodel pysat_metamodel bdd_metamodel z3_metamodel; do
+            pip install "git+https://github.com/flamapy/${sibling}@develop"
+          done
+          pip install .
+      - uses: fandango-fuzzer/fandango-action@v1.1.4
+        with:
+          # The Boolean level of UVL, which every backend reads. The other UVL specs also make models that
+          # an analyser is right to reject (a constraint over a feature that is not declared, say).
+          specs: uvl-boolean
+          setup-python: "false"
+          count: "100"
+          reduce-budget: "15"
