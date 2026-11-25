@@ -38,7 +38,7 @@ jobs:
             pip install "git+https://github.com/flamapy/${sibling}@develop"
           done
           pip install .
-      - uses: fandango-fuzzer/fandango-action@v1
+      - uses: fandango-fuzzer/fandango-action@v1.1.4
         with:
           # The Boolean level of UVL, which every backend reads. The other UVL specs also make models that
           # an analyser is right to reject (a constraint over a feature that is not declared, say).
